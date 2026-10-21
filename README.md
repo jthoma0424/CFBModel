@@ -23,6 +23,7 @@ A private college football betting model. It pulls advanced stats and computer r
    - A game is flagged as a **PLAY** when edge ≥ your threshold.
 6. **Totals.** Every team also gets an offense and defense rating in points, blended from SP+ offense/defense, opponent-adjusted EPA, and an in-house regression on points scored and allowed.
    - Projected points = league average + your offense rating + their defense rating (points allowed above average) ± half the home-field edge.
+   - Pace: each team's plays per game (both sides) sets a matchup multiplier. Two fast teams push the projection up, two slow teams pull it down. Set **Pace weight** on Admin (0 = off).
    - The projected total is compared to the DraftKings total. P(over) = Φ((model total − DK total) / σ_total), and a game is flagged when the edge ≥ the totals threshold.
 7. **Lock and grade.** Predictions freeze at kickoff. They are graded ATS when the game goes final. Bets you log are graded the same way.
 
@@ -39,7 +40,7 @@ The **Performance** page shows ATS record by edge bucket. It also shows the mode
 ### 2. Create the Supabase project
 1. Go to https://supabase.com and create a **New project**. Save the database password.
 2. Open **SQL Editor**, paste in all of `supabase/migrations/0001_schema.sql`, and click **Run**.
-3. Also run `supabase/migrations/0002_totals.sql` the same way (adds totals).
+3. Also run `supabase/migrations/0002_totals.sql` the same way (adds totals), then `0003_pace.sql` (adds pace).
 4. Under **Project Settings → API**, copy the **Project URL** and the **service_role** key. Keep the service_role key secret: it bypasses row-level security.
 
 Every table has RLS turned on with no public policies. The browser never talks to Supabase directly; all reads happen on the server.

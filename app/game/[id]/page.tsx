@@ -48,6 +48,8 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
         <Stat k="Total edge" v={fmtSigned(p?.total_edge)} cls={signClass(p?.total_edge)} />
         <Stat k="Total pick" v={p?.total_pick ? `${p.total_pick === 'over' ? 'Over' : 'Under'} ${fmtNum(p.book_total)}` : '—'} />
         <Stat k="Total win prob." v={fmtPct(p?.total_prob)} />
+        <Stat k="Pace (plays/game)" v={`${fmtNum(ar?.pace, 0)} / ${fmtNum(hr?.pace, 0)}`} />
+        <Stat k="Pace factor" v={p?.pace_factor != null ? `×${Number(p.pace_factor).toFixed(3)}` : '—'} />
       </div>
 
       <div className="grid">

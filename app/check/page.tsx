@@ -73,6 +73,12 @@ export default async function Check() {
         ok: !colErr,
         detail: colErr ? 'Not run yet → paste supabase/migrations/0002_totals.sql into the Supabase SQL Editor and click Run.' : 'Installed',
       });
+      const { error: paceErr } = await db.from('predictions').select('pace_factor').limit(1);
+      rows.push({
+        name: 'Pace update (0003_pace.sql)',
+        ok: !paceErr,
+        detail: paceErr ? 'Not run yet → paste supabase/migrations/0003_pace.sql into the Supabase SQL Editor and click Run.' : 'Installed',
+      });
     } catch (e: any) {
       rows.push({ name: 'Connect to Supabase', ok: false, detail: e?.message ?? String(e) });
     }

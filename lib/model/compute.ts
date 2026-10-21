@@ -1,9 +1,9 @@
 import { db, selectAll, upsertChunked } from '../supabase';
-import { betProfit, evaluateSpread, evaluateTotal, fitWeights, gradeSpread, gradeTotal, mean, movRatings, projectScore, scoringRatings } from './math';
+import { betProfit, evaluateSpread, evaluateTotal, fitWeights, gradeSpread, gradeTotal, mean, movRatings, paceFactor, projectScore, scoringRatings, shrinkPace } from './math';
 
 export type Settings = {
   hfa: number; sigma: number; edge_threshold: number; margin_cap: number; prior_weight: number; default_price: number;
-  total_sigma: number; total_edge_threshold: number; points_cap: number;
+  total_sigma: number; total_edge_threshold: number; points_cap: number; pace_weight: number;
 };
 export type Source = { key: string; name: string; origin: string; scale: number; weight: number; enabled: boolean };
 
@@ -35,6 +35,7 @@ export async function getSettings(): Promise<Settings> {
     hfa: Number(s.hfa ?? 2.5), sigma: Number(s.sigma ?? 14), edge_threshold: Number(s.edge_threshold ?? 3),
     margin_cap: Number(s.margin_cap ?? 28), prior_weight: Number(s.prior_weight ?? 3), default_price: Number(s.default_price ?? -110),
     total_sigma: Number(s.total_sigma ?? 13.5), total_edge_threshold: Number(s.total_edge_threshold ?? 3), points_cap: Number(s.points_cap ?? 30),
+    pace_weight: Number(s.pace_weight ?? 1),
   };
 }
 
@@ -51,6 +52,35 @@ function blend(components: Record<string, number>, weights: Map<string, number>)
     if (w > 0) { num += w * v; den += w; }
   }
   return den > 0 ? num / den : null;
+}
+
+/**
+ * Plays per game (both teams' snaps) for each team, from the newest CFBD advanced-stats
+ * snapshot at or before `week`. Games are counted up to when that snapshot was taken,
+ * then each team is shrunk toward the FBS average so early-season numbers aren't extreme.
+ */
+export async function teamPace(season: number, week: number, isFbs: Map<number, boolean>) {
+  const stats = await selectAll<any>((a, b) =>
+    db().from('team_stats').select('team_id,week,metrics,fetched_at').eq('season', season).eq('source', 'cfbd_advanced').lte('week', week)
+      .order('week', { ascending: false }).range(a, b),
+  );
+  const latest = new Map<number, any>();
+  for (const r of stats) if (!latest.has(r.team_id)) latest.set(r.team_id, r);
+  const games = await selectAll<any>((a, b) =>
+    db().from('games').select('home_id,away_id,start_date').eq('season', season).eq('completed', true).range(a, b),
+  );
+  const raw = new Map<number, { ppg: number; games: number }>();
+  for (const [id, r] of latest) {
+    const plays = Number(r.metrics?.offense?.plays ?? 0) + Number(r.metrics?.defense?.plays ?? 0);
+    const asOf = r.fetched_at ? new Date(r.fetched_at).getTime() : Date.now();
+    const n = games.filter((g) => (g.home_id === id || g.away_id === id) && new Date(g.start_date).getTime() < asOf).length;
+    if (plays > 0 && n > 0) raw.set(id, { ppg: plays / n, games: n });
+  }
+  const fbs = [...raw.entries()].filter(([id]) => isFbs.get(id)).map(([, v]) => v.ppg);
+  const league = fbs.length >= 10 ? mean(fbs) : 0;
+  const pace = new Map<number, number>();
+  if (league > 0) for (const [id, v] of raw) pace.set(id, shrinkPace(v.ppg, v.games, league));
+  return { pace, league };
 }
 
 /**
@@ -166,7 +196,10 @@ export async function computePowerRatings(season: number, week: number) {
     }
   }
 
-  // 5) Final composite + rank (rank among FBS only)
+  // 5) Pace (plays per game) for totals
+  const { pace } = await teamPace(season, week, isFbs);
+
+  // 6) Final composite + rank (rank among FBS only)
   const rows: any[] = [];
   for (const [id, c] of comps) {
     const r = blend(c, weights);
@@ -175,6 +208,7 @@ export async function computePowerRatings(season: number, week: number) {
     rows.push({
       season, week, team_id: id, rating: Math.round(r * 100) / 100, components: roundObj(c),
       offense: odv ? Math.round(odv.o * 100) / 100 : null, defense: odv ? Math.round(odv.d * 100) / 100 : null,
+      pace: pace.has(id) ? Math.round(pace.get(id)! * 10) / 10 : null,
       computed_at: new Date().toISOString(),
     });
   }
@@ -195,7 +229,10 @@ export function bookPriority(): string[] {
 
 export async function buildPredictions(season: number, week: number) {
   const s = await getSettings();
-  const prs = await selectAll<any>((a, b) => db().from('power_ratings').select('team_id,rating,offense,defense').eq('season', season).eq('week', week).range(a, b));
+  const prs = await selectAll<any>((a, b) => db().from('power_ratings').select('team_id,rating,offense,defense,pace,rank').eq('season', season).eq('week', week).range(a, b));
+  const paceMap = new Map(prs.filter((r) => r.pace !== null).map((r) => [r.team_id, Number(r.pace)]));
+  const fbsPace = prs.filter((r) => r.rank !== null && r.pace !== null).map((r) => Number(r.pace));
+  const leaguePace = fbsPace.length >= 10 ? mean(fbsPace) : 0;
   const ratings = new Map(prs.map((r) => [r.team_id, Number(r.rating)]));
   const odMap = new Map(prs.filter((r) => r.offense !== null && r.defense !== null).map((r) => [r.team_id, { o: Number(r.offense), d: Number(r.defense) }]));
   const mu = await leagueAvgPoints(season, week);
@@ -234,7 +271,7 @@ export async function buildPredictions(season: number, week: number) {
       model_margin: round(margin), model_spread: round(-margin),
       book: null, book_home_spread: null, book_home_price: null, book_away_price: null,
       edge: null, pick_team_id: null, pick_spread: null, cover_prob: null, ev: null, is_play: false,
-      home_points_proj: null, away_points_proj: null, model_total: null,
+      home_points_proj: null, away_points_proj: null, model_total: null, pace_factor: null,
       total_book: null, book_total: null, over_price: null, under_price: null,
       total_pick: null, total_edge: null, total_prob: null, total_ev: null, total_is_play: false,
       updated_at: new Date().toISOString(),
@@ -252,8 +289,15 @@ export async function buildPredictions(season: number, week: number) {
     // Totals: projected points from offense/defense ratings
     const ho = odMap.get(g.home_id), ao = odMap.get(g.away_id);
     if (ho && ao) {
-      const proj = projectScore(ho, ao, mu, s.hfa, !!g.neutral_site);
-      Object.assign(row, { home_points_proj: round(proj.homePts, 1), away_points_proj: round(proj.awayPts, 1), model_total: round(proj.total, 1) });
+      const base = projectScore(ho, ao, mu, s.hfa, !!g.neutral_site);
+      // Pace: a team without pace data (e.g. FCS) is treated as league-average speed.
+      const pf = leaguePace > 0 && s.pace_weight > 0
+        ? paceFactor(paceMap.get(g.home_id) ?? leaguePace, paceMap.get(g.away_id) ?? leaguePace, leaguePace, s.pace_weight)
+        : 1;
+      const proj = { homePts: base.homePts * pf, awayPts: base.awayPts * pf, total: base.total * pf };
+      Object.assign(row, {
+        home_points_proj: round(proj.homePts, 1), away_points_proj: round(proj.awayPts, 1), model_total: round(proj.total, 1), pace_factor: round(pf, 3),
+      });
       const tl = pickLine(g.id, 'total');
       if (tl) {
         const op = tl.over_price ?? s.default_price, up = tl.under_price ?? s.default_price;

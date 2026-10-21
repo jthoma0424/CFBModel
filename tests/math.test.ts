@@ -109,3 +109,16 @@ test('scoring ratings recover offense/defense', () => {
   const p = projectScore({ o: 10, d: -7 }, { o: -6, d: 5 }, 28, 2.5, false);
   close(p.homePts, 44.25); close(p.awayPts, 13.75); close(p.total, 58);
 });
+
+import { paceFactor, shrinkPace } from '../lib/model/math.ts';
+
+test('pace factor', () => {
+  close(paceFactor(140, 140, 140), 1);               // two average teams
+  close(paceFactor(154, 154, 140), 1.1);             // two fast teams play faster than either usually does
+  close(paceFactor(126, 126, 140), 0.9);             // two slow teams
+  close(paceFactor(154, 126, 140), 0.99);            // fast vs slow roughly cancels
+  close(paceFactor(154, 154, 140, 0), 1);            // weight 0 = off
+  close(paceFactor(154, 154, 140, 0.5), Math.sqrt(1.1));
+  close(shrinkPace(160, 2, 140, 2), 150);
+  assert.equal(paceFactor(0, 140, 140), 1);
+});

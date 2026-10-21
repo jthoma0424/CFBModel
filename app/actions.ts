@@ -27,6 +27,7 @@ export async function saveSettings(form: FormData) {
     hfa: n('hfa'), sigma: n('sigma'), edge_threshold: n('edge_threshold'),
     margin_cap: n('margin_cap'), prior_weight: n('prior_weight'), default_price: n('default_price'),
     total_sigma: n('total_sigma'), total_edge_threshold: n('total_edge_threshold'), points_cap: n('points_cap'),
+    pace_weight: n('pace_weight'),
     updated_at: new Date().toISOString(),
   }).eq('id', 1);
   redirect('/admin?saved=settings');

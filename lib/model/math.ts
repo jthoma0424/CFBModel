@@ -213,3 +213,25 @@ export function projectScore(
   const awayPts = mu + away.o + home.d - h;
   return { homePts, awayPts, total: homePts + awayPts, margin: homePts - awayPts };
 }
+
+// ---------------------------------------------------------------------------
+// Pace
+// ---------------------------------------------------------------------------
+/** Shrink a team's plays-per-game toward the league average (early-season samples are small). */
+export function shrinkPace(playsPerGame: number, games: number, league: number, priorGames = 2): number {
+  return (playsPerGame * games + league * priorGames) / (games + priorGames);
+}
+
+/**
+ * Pace multiplier for a matchup. Each team's ratings were earned at roughly its own
+ * typical game pace; two fast teams together play faster than either one usually does.
+ *   expected plays = paceA × paceB / league
+ *   factor = expected plays / average of the two teams' usual pace
+ * `weight` dampens the effect (0 = off, 1 = full).
+ */
+export function paceFactor(paceA: number, paceB: number, league: number, weight = 1): number {
+  if (!(paceA > 0 && paceB > 0 && league > 0)) return 1;
+  const expected = (paceA * paceB) / league;
+  const baseline = (paceA + paceB) / 2;
+  return Math.pow(expected / baseline, weight);
+}

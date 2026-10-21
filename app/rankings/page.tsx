@@ -26,7 +26,7 @@ export default async function Rankings({ searchParams }: { searchParams: Promise
   return (
     <>
       <h1>Power rankings</h1>
-      <p className="sub">Points better than an average FBS team on a neutral field. Rating A − Rating B (+ HFA) = projected margin. Off/Def drive the totals: Off = points scored above average, Def = points allowed above average (negative is good).</p>
+      <p className="sub">Points better than an average FBS team on a neutral field. Rating A − Rating B (+ HFA) = projected margin. Off/Def drive the totals: Off = points scored above average, Def = points allowed above average (negative is good). Pace = plays per game, both teams combined.</p>
       <WeekPicker
         season={season} week={week} weeks={weeks} path="/rankings"
         extra={
@@ -46,7 +46,7 @@ export default async function Rankings({ searchParams }: { searchParams: Promise
             <thead>
               <tr>
                 <th className="n">#</th><th className="n">Δ</th><th>Team</th><th>Conf</th>
-                <th className="n">Rating</th><th></th><th className="n" title="Points scored vs. avg defense, above FBS average">Off</th><th className="n" title="Points allowed vs. avg offense, relative to FBS average (negative = better)">Def</th>
+                <th className="n">Rating</th><th></th><th className="n" title="Points scored vs. avg defense, above FBS average">Off</th><th className="n" title="Points allowed vs. avg offense, relative to FBS average (negative = better)">Def</th><th className="n" title="Plays per game, both teams combined">Pace</th>
                 {active.map((s) => <th key={s.key} className="n" title={s.name}>{s.key.toUpperCase()}</th>)}
               </tr>
             </thead>
@@ -67,6 +67,7 @@ export default async function Rankings({ searchParams }: { searchParams: Promise
                     </td>
                     <td className={`n ${signClass(r.offense)}`}>{fmtSigned(r.offense)}</td>
                     <td className={`n ${signClass(r.defense === null ? null : -r.defense)}`}>{fmtSigned(r.defense)}</td>
+                    <td className="n muted">{fmtNum(r.pace, 0)}</td>
                     {active.map((s) => <td key={s.key} className="n muted">{fmtNum(r.components?.[s.key])}</td>)}
                   </tr>
                 );

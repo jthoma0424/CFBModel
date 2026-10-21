@@ -75,6 +75,7 @@ export default async function Admin({ searchParams }: { searchParams: Promise<Re
             <label>Totals σ (pts)<input name="total_sigma" type="number" step="0.1" defaultValue={settings.total_sigma} /></label>
             <label>Totals play threshold<input name="total_edge_threshold" type="number" step="0.5" defaultValue={settings.total_edge_threshold} /></label>
             <label>Points cap (pts)<input name="points_cap" type="number" step="1" defaultValue={settings.points_cap} /></label>
+            <label>Pace weight (0 = off)<input name="pace_weight" type="number" step="0.1" min="0" max="1.5" defaultValue={settings.pace_weight} /></label>
             <button type="submit">Save</button>
           </form>
         </div>

@@ -71,7 +71,7 @@ export default async function Slate({ searchParams }: { searchParams: Promise<Re
               <tr>
                 <th>Kickoff (ET)</th><th>Away</th><th>Home</th>
                 <th className="n">Away proj</th><th className="n">Home proj</th>
-                <th className="n">Model total</th><th className="n">DK total</th>
+                <th className="n" title="Pace multiplier applied to the projection">Pace</th><th className="n">Model total</th><th className="n">DK total</th>
                 <th className="n">Edge</th><th>Pick</th><th className="n">Win %</th><th className="n">EV/u</th><th>Result</th>
               </tr>
             </thead>
@@ -83,6 +83,7 @@ export default async function Slate({ searchParams }: { searchParams: Promise<Re
                   <td><Team t={teams.get(g.home_id)} /></td>
                   <td className="n">{fmtNum(p?.away_points_proj)}</td>
                   <td className="n">{fmtNum(p?.home_points_proj)}</td>
+                  <td className={`n ${p?.pace_factor > 1.005 ? 'pos' : p?.pace_factor < 0.995 ? 'neg' : 'muted'}`}>{p?.pace_factor != null ? `×${Number(p.pace_factor).toFixed(2)}` : '—'}</td>
                   <td className="n"><b>{fmtNum(p?.model_total)}</b></td>
                   <td className="n">
                     {fmtNum(p?.book_total)}{' '}

@@ -10,6 +10,8 @@ export const dynamic = 'force-dynamic';
 export default async function Slate({ searchParams }: { searchParams: Promise<Record<string, string>> }) {
   const sp = await searchParams;
   const { season, week, weeks } = await resolveWeek(sp);
+  const market = sp.market === 'totals' ? 'totals' : 'spreads';
+  const isTot = market === 'totals';
   const playsOnly = sp.plays === '1';
   const sort = sp.sort ?? 'edge';
   const [teams, settings] = await Promise.all([teamMap(), getSettings()]);
@@ -18,35 +20,43 @@ export default async function Slate({ searchParams }: { searchParams: Promise<Re
   const preds = await selectAll<any>((a, b) => db().from('predictions').select('*').eq('season', season).eq('week', week).range(a, b));
   const pmap = new Map(preds.map((p) => [p.game_id, p]));
 
-  let rows = games.map((g) => ({ g, p: pmap.get(g.id) }));
-  if (playsOnly) rows = rows.filter((r) => r.p?.is_play);
-  rows.sort((a, b) => {
-    if (sort === 'time') return String(a.g.start_date).localeCompare(String(b.g.start_date));
-    return (b.p?.edge ?? -99) - (a.p?.edge ?? -99);
-  });
+  const edgeOf = (p: any) => (isTot ? p?.total_edge : p?.edge) ?? -99;
+  const playOf = (p: any) => !!(isTot ? p?.total_is_play : p?.is_play);
+  const resultOf = (p: any) => (isTot ? p?.total_result : p?.ats_result);
 
-  const withLine = preds.filter((p) => p.book_home_spread !== null);
-  const plays = preds.filter((p) => p.is_play);
-  const graded = preds.filter((p) => p.is_play && p.ats_result);
-  const wins = graded.filter((p) => p.ats_result === 'win').length;
-  const losses = graded.filter((p) => p.ats_result === 'loss').length;
+  let rows = games.map((g) => ({ g, p: pmap.get(g.id) }));
+  if (playsOnly) rows = rows.filter((r) => playOf(r.p));
+  rows.sort((a, b) => (sort === 'time' ? String(a.g.start_date).localeCompare(String(b.g.start_date)) : edgeOf(b.p) - edgeOf(a.p)));
+
+  const withLine = preds.filter((p) => (isTot ? p.book_total : p.book_home_spread) !== null);
+  const plays = preds.filter(playOf);
+  const graded = plays.filter(resultOf);
+  const wins = graded.filter((p) => resultOf(p) === 'win').length;
+  const losses = graded.filter((p) => resultOf(p) === 'loss').length;
+  const tab = (m: string, label: string) => (
+    <Link href={`/?season=${season}&week=${week}&market=${m}`} className={`tab ${market === m ? 'active' : ''}`}>{label}</Link>
+  );
 
   return (
     <>
       <h1>Week {week} slate</h1>
+      <div className="tabs">{tab('spreads', 'Spreads')}{tab('totals', 'Totals')}</div>
       <p className="sub">
-        Model spread vs. DraftKings. Plays are flagged at ≥ {settings.edge_threshold} pts of edge · HFA {settings.hfa} · σ {settings.sigma}
+        {isTot
+          ? <>Projected total vs. DraftKings. Plays are flagged at ≥ {settings.total_edge_threshold} pts of edge · σ {settings.total_sigma}</>
+          : <>Model spread vs. DraftKings. Plays are flagged at ≥ {settings.edge_threshold} pts of edge · HFA {settings.hfa} · σ {settings.sigma}</>}
       </p>
       <div className="stats">
         <Stat k="Games" v={games.length} />
-        <Stat k="With DK line" v={withLine.length} />
+        <Stat k={isTot ? 'With DK total' : 'With DK line'} v={withLine.length} />
         <Stat k="Plays" v={plays.length} />
-        <Stat k="Plays ATS (this week)" v={graded.length ? `${wins}-${losses}` : '—'} />
+        <Stat k={isTot ? 'Plays O/U (this week)' : 'Plays ATS (this week)'} v={graded.length ? `${wins}-${losses}` : '—'} />
       </div>
       <WeekPicker
         season={season} week={week} weeks={weeks} path="/"
         extra={
           <>
+            <input type="hidden" name="market" value={market} />
             <label>Show<select name="plays" defaultValue={playsOnly ? '1' : '0'}><option value="0">All games</option><option value="1">Plays only</option></select></label>
             <label>Sort<select name="sort" defaultValue={sort}><option value="edge">Edge</option><option value="time">Kickoff</option></select></label>
           </>
@@ -54,6 +64,49 @@ export default async function Slate({ searchParams }: { searchParams: Promise<Re
       />
       {!games.length ? (
         <Empty>No games for this week yet. Go to <Link href="/admin">Admin</Link> and run <b>Setup</b> then <b>Daily</b>.</Empty>
+      ) : isTot ? (
+        <div className="tablewrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Kickoff (ET)</th><th>Away</th><th>Home</th>
+                <th className="n">Away proj</th><th className="n">Home proj</th>
+                <th className="n">Model total</th><th className="n">DK total</th>
+                <th className="n">Edge</th><th>Pick</th><th className="n">Win %</th><th className="n">EV/u</th><th>Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ g, p }) => (
+                <tr key={g.id} className={p?.total_is_play ? 'play' : ''}>
+                  <td className="muted">{fmtKick(g.start_date)}{g.neutral_site ? ' · N' : ''}</td>
+                  <td><Team t={teams.get(g.away_id)} /></td>
+                  <td><Team t={teams.get(g.home_id)} /></td>
+                  <td className="n">{fmtNum(p?.away_points_proj)}</td>
+                  <td className="n">{fmtNum(p?.home_points_proj)}</td>
+                  <td className="n"><b>{fmtNum(p?.model_total)}</b></td>
+                  <td className="n">
+                    {fmtNum(p?.book_total)}{' '}
+                    <span className="muted">{p?.book_total != null ? `${fmtPrice(p.over_price)}/${fmtPrice(p.under_price)}` : ''}</span>
+                    {p?.total_book && !p.total_book.startsWith('draftkings') ? <span className="warn" title={`Line source: ${p.total_book}`}> *</span> : null}
+                  </td>
+                  <td className={`n ${signClass(p?.total_edge)}`}>{fmtSigned(p?.total_edge)}</td>
+                  <td>
+                    {p?.total_pick
+                      ? <Link href={`/game/${g.id}`}>{p.total_pick === 'over' ? 'Over' : 'Under'} {fmtNum(p.book_total)}</Link>
+                      : <Link href={`/game/${g.id}`} className="muted">details</Link>}
+                    {p?.total_is_play ? <> <span className="badge play">PLAY</span></> : null}
+                  </td>
+                  <td className="n">{fmtPct(p?.total_prob)}</td>
+                  <td className={`n ${signClass(p?.total_ev)}`}>{fmtSigned(p?.total_ev, 3)}</td>
+                  <td>
+                    {g.completed ? <span className="muted">{g.away_points + g.home_points} pts</span> : null}{' '}
+                    {p?.total_result ? <span className={`badge ${p.total_result}`}>{p.total_result.toUpperCase()}</span> : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : (
         <div className="tablewrap">
           <table>
@@ -100,7 +153,7 @@ export default async function Slate({ searchParams }: { searchParams: Promise<Re
         </div>
       )}
       <p className="sub" style={{ marginTop: 10 }}>
-        <span className="warn">*</span> = no live DraftKings line yet; using CFBD's line instead. Predictions lock at kickoff.
+        <span className="warn">*</span> = no live DraftKings line yet; using CFBD&apos;s line instead. Predictions lock at kickoff.
       </p>
     </>
   );

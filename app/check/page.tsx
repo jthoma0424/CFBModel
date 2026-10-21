@@ -67,6 +67,12 @@ export default async function Check() {
         });
         if (error) break;
       }
+      const { error: colErr } = await db.from('predictions').select('total_pick').limit(1);
+      rows.push({
+        name: 'Totals update (0002_totals.sql)',
+        ok: !colErr,
+        detail: colErr ? 'Not run yet → paste supabase/migrations/0002_totals.sql into the Supabase SQL Editor and click Run.' : 'Installed',
+      });
     } catch (e: any) {
       rows.push({ name: 'Connect to Supabase', ok: false, detail: e?.message ?? String(e) });
     }

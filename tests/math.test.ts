@@ -79,3 +79,33 @@ test('generic table parser + manual csv', () => {
   assert.deepEqual(parseRatingTable(html, /^FEI$/i), [{ team: 'Georgia', rating: 1.42 }, { team: 'Texas', rating: -0.31 }]);
   assert.deepEqual(parseManualCsv('Team,Rating\n1\tOhio State\t26.1\n"Texas A&M", 12'), [{ team: 'Ohio State', rating: 26.1 }, { team: 'Texas A&M', rating: 12 }]);
 });
+
+import { evaluateTotal, gradeTotal, projectScore, scoringRatings } from '../lib/model/math.ts';
+
+test('totals evaluation and grading', () => {
+  const o = evaluateTotal(58, 54.5, 13.5);
+  assert.equal(o.side, 'over'); close(o.edge, 3.5); assert.ok(o.prob > 0.6 && o.prob < 0.61);
+  const u = evaluateTotal(45, 51, 13.5);
+  assert.equal(u.side, 'under'); close(u.edge, 6);
+  assert.equal(gradeTotal(60, 'over', 54.5), 'win');
+  assert.equal(gradeTotal(50, 'over', 54.5), 'loss');
+  assert.equal(gradeTotal(54, 'under', 54), 'push');
+});
+
+test('scoring ratings recover offense/defense', () => {
+  const O = new Map([[1, 10], [2, 4], [3, 0], [4, -6], [5, -8]]);
+  const D = new Map([[1, -7], [2, 3], [3, 0], [4, 5], [5, -1]]);
+  const rows: any[] = [];
+  for (const h of O.keys()) for (const a of O.keys()) if (h !== a) {
+    rows.push({ team: h, opp: a, points: 28 + O.get(h)! + D.get(a)! + 1.25, loc: 1 });
+    rows.push({ team: a, opp: h, points: 28 + O.get(a)! + D.get(h)! - 1.25, loc: -1 });
+  }
+  const r = scoringRatings(rows, new Map(), { mu: 28, hfa: 2.5, cap: 1000, lambda: 0.001 });
+  const mo = [...r.values()].reduce((s, v) => s + v.o, 0) / r.size;
+  const md = [...r.values()].reduce((s, v) => s + v.d, 0) / r.size;
+  // O and D are identified up to a shared constant; check after centering
+  const tO = [...O.values()].reduce((a, b) => a + b, 0) / O.size, tD = [...D.values()].reduce((a, b) => a + b, 0) / D.size;
+  for (const id of O.keys()) { close(r.get(id)!.o - mo, O.get(id)! - tO, 0.05); close(r.get(id)!.d - md, D.get(id)! - tD, 0.05); }
+  const p = projectScore({ o: 10, d: -7 }, { o: -6, d: 5 }, 28, 2.5, false);
+  close(p.homePts, 44.25); close(p.awayPts, 13.75); close(p.total, 58);
+});

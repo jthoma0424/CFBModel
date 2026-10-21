@@ -195,9 +195,10 @@ export async function syncCfbdLines(season: number) {
     (await selectAll<{ id: number }>((a, b) => db().from('games').select('id').eq('season', season).range(a, b))).map((g) => g.id),
   );
   const latest = await selectAll<any>((a, b) =>
-    db().from('latest_lines').select('game_id,book,home_spread').like('book', 'cfbd_%').range(a, b),
+    db().from('latest_lines').select('game_id,book,home_spread,total').like('book', 'cfbd_%').range(a, b),
   );
-  const last = new Map(latest.map((l) => [`${l.game_id}|${l.book}`, Number(l.home_spread)]));
+  const key = (sp: any, tot: any) => `${sp ?? ''}|${tot ?? ''}`;
+  const last = new Map(latest.map((l) => [`${l.game_id}|${l.book}`, key(l.home_spread === null ? null : Number(l.home_spread), l.total === null ? null : Number(l.total))]));
   const rows: any[] = [];
   for (const seasonType of ['regular', 'postseason']) {
     const games = await cfbd<any[]>('/lines', { year: season, seasonType });
@@ -205,11 +206,17 @@ export async function syncCfbdLines(season: number) {
       if (!gameIds.has(g.id)) continue;
       for (const l of g.lines ?? []) {
         const spread = num(l.spread);
-        if (spread === null) continue;
+        const total = num(l.overUnder ?? l.over_under);
+        if (spread === null && total === null) continue;
         const book = 'cfbd_' + String(l.provider).toLowerCase().replace(/[^a-z0-9]+/g, '');
-        if (last.get(`${g.id}|${book}`) === spread) continue;
-        last.set(`${g.id}|${book}`, spread);
-        rows.push({ game_id: g.id, book, home_spread: spread, away_spread: -spread, home_price: -110, away_price: -110 });
+        const k = key(spread, total);
+        if (last.get(`${g.id}|${book}`) === k) continue;
+        last.set(`${g.id}|${book}`, k);
+        rows.push({
+          game_id: g.id, book,
+          home_spread: spread, away_spread: spread === null ? null : -spread, home_price: -110, away_price: -110,
+          total, over_price: total === null ? null : -110, under_price: total === null ? null : -110,
+        });
       }
     }
   }

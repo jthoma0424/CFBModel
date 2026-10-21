@@ -26,6 +26,7 @@ export async function saveSettings(form: FormData) {
   await db().from('model_settings').update({
     hfa: n('hfa'), sigma: n('sigma'), edge_threshold: n('edge_threshold'),
     margin_cap: n('margin_cap'), prior_weight: n('prior_weight'), default_price: n('default_price'),
+    total_sigma: n('total_sigma'), total_edge_threshold: n('total_edge_threshold'), points_cap: n('points_cap'),
     updated_at: new Date().toISOString(),
   }).eq('id', 1);
   redirect('/admin?saved=settings');
@@ -85,9 +86,12 @@ export async function importManual(form: FormData) {
 
 export async function addBet(form: FormData) {
   const gameId = Number(form.get('game_id'));
+  const market = form.get('market') === 'total' ? 'total' : 'spread';
   await db().from('bets').insert({
     game_id: gameId,
-    team_id: Number(form.get('team_id')),
+    market,
+    side: market === 'total' ? (form.get('side') === 'under' ? 'under' : 'over') : null,
+    team_id: market === 'total' ? null : Number(form.get('team_id')),
     spread: Number(form.get('spread')),
     price: Number(form.get('price') || -110),
     stake: Number(form.get('stake') || 1),

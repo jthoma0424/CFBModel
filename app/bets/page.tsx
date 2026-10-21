@@ -40,7 +40,7 @@ export default async function Bets() {
                   <tr key={b.id}>
                     <td>{g ? <Link href={`/game/${g.id}`}>{teams.get(g.away_id)?.school} @ {teams.get(g.home_id)?.school}</Link> : '—'} <span className="muted">{g ? fmtKick(g.start_date) : ''}</span></td>
                     <td>{g?.week}</td>
-                    <td><Team t={teams.get(b.team_id)} /> {fmtSpread(b.spread)}</td>
+                    <td>{b.market === 'total' ? <>{b.side === 'under' ? 'Under' : 'Over'} {b.spread}</> : <><Team t={teams.get(b.team_id)} /> {fmtSpread(b.spread)}</>}</td>
                     <td className="n">{fmtPrice(b.price)}</td>
                     <td className="n">{b.stake}</td>
                     <td>{b.result ? <span className={`badge ${b.result}`}>{b.result.toUpperCase()}</span> : <span className="muted">pending</span>}</td>

@@ -21,7 +21,10 @@ A private college football betting model. It pulls advanced stats and computer r
    - Cover probability = Φ(edge / σ).
    - EV uses the actual DK price.
    - A game is flagged as a **PLAY** when edge ≥ your threshold.
-6. **Lock and grade.** Predictions freeze at kickoff. They are graded ATS when the game goes final. Bets you log are graded the same way.
+6. **Totals.** Every team also gets an offense and defense rating in points, blended from SP+ offense/defense, opponent-adjusted EPA, and an in-house regression on points scored and allowed.
+   - Projected points = league average + your offense rating + their defense rating (points allowed above average) ± half the home-field edge.
+   - The projected total is compared to the DraftKings total. P(over) = Φ((model total − DK total) / σ_total), and a game is flagged when the edge ≥ the totals threshold.
+7. **Lock and grade.** Predictions freeze at kickoff. They are graded ATS when the game goes final. Bets you log are graded the same way.
 
 The **Performance** page shows ATS record by edge bucket. It also shows the model's error against final margins next to the line's error. If the model's error isn't close to the line's, trust the plays less.
 
@@ -36,7 +39,8 @@ The **Performance** page shows ATS record by edge bucket. It also shows the mode
 ### 2. Create the Supabase project
 1. Go to https://supabase.com and create a **New project**. Save the database password.
 2. Open **SQL Editor**, paste in all of `supabase/migrations/0001_schema.sql`, and click **Run**.
-3. Under **Project Settings → API**, copy the **Project URL** and the **service_role** key. Keep the service_role key secret: it bypasses row-level security.
+3. Also run `supabase/migrations/0002_totals.sql` the same way (adds totals).
+4. Under **Project Settings → API**, copy the **Project URL** and the **service_role** key. Keep the service_role key secret: it bypasses row-level security.
 
 Every table has RLS turned on with no public policies. The browser never talks to Supabase directly; all reads happen on the server.
 
@@ -53,7 +57,7 @@ Sign in with `SITE_PASSWORD`. Then go to **Admin**, click **Setup** (teams, sche
 2. In Vercel, click **Add New → Project**, import the repo, and add every variable from `.env.example`.
 3. Deploy. `vercel.json` sets up these daily jobs (times in UTC):
    - `11:00`: `daily` (everything)
-   - `17:00`: `odds` (refresh DraftKings)
+   - `17:00`: `odds` (refresh DraftKings spreads and totals, 2 Odds API credits)
    - `17:15`: `model` (rebuild predictions)
 
    On the Pro plan you can add more `odds` runs, for example every 2 hours on Saturdays. Each run costs 1 Odds API credit.

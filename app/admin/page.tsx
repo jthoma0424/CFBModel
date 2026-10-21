@@ -4,6 +4,7 @@ import { getSettings, getSources } from '@/lib/model/compute';
 import { teamMap } from '@/lib/queries';
 import { applyCalibration, calibrateAction, ignoreAlias, importManual, mapAlias, runJobAction, saveSettings, saveSources } from '../actions';
 import { fmtKick } from '@/lib/format';
+import { RunButton } from './run-button';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -12,7 +13,7 @@ const JOB_HELP: [string, string][] = [
   ['setup', 'Teams, name aliases, calendar, schedule. Run once per season.'],
   ['cfbd', 'Scores + SP+, FPI, SRS, Elo, adjusted EPA, advanced stats, CFBD lines.'],
   ['scrape', 'Sagarin Predictor, FEI.'],
-  ['odds', 'DraftKings spreads (1 Odds API credit).'],
+  ['odds', 'DraftKings spreads + totals (2 Odds API credits).'],
   ['model', 'Grade results, rebuild power ratings, update predictions.'],
   ['daily', 'cfbd + scrape + odds + model in sequence.'],
 ];
@@ -39,7 +40,7 @@ export default async function Admin({ searchParams }: { searchParams: Promise<Re
         {JOB_HELP.map(([job, help]) => (
           <form key={job} action={runJobAction} title={help}>
             <input type="hidden" name="job" value={job} />
-            <button type="submit" className={job === 'daily' ? '' : 'secondary'}>{job[0].toUpperCase() + job.slice(1)}</button>
+            <RunButton label={job[0].toUpperCase() + job.slice(1)} primary={job === 'daily'} />
           </form>
         ))}
       </div>
@@ -71,6 +72,9 @@ export default async function Admin({ searchParams }: { searchParams: Promise<Re
             <label>MOV cap (pts)<input name="margin_cap" type="number" step="1" defaultValue={settings.margin_cap} /></label>
             <label>Prior weight (games)<input name="prior_weight" type="number" step="0.5" defaultValue={settings.prior_weight} /></label>
             <label>Default price<input name="default_price" type="number" defaultValue={settings.default_price} /></label>
+            <label>Totals σ (pts)<input name="total_sigma" type="number" step="0.1" defaultValue={settings.total_sigma} /></label>
+            <label>Totals play threshold<input name="total_edge_threshold" type="number" step="0.5" defaultValue={settings.total_edge_threshold} /></label>
+            <label>Points cap (pts)<input name="points_cap" type="number" step="1" defaultValue={settings.points_cap} /></label>
             <button type="submit">Save</button>
           </form>
         </div>

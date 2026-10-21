@@ -41,6 +41,14 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
         <Stat k="Cover prob." v={fmtPct(p?.cover_prob)} />
         <Stat k={`${home?.school} win prob.`} v={fmtPct(winProb)} />
       </div>
+      <div className="stats">
+        <Stat k="Projected score" v={p?.model_total != null ? `${fmtNum(p.away_points_proj)} – ${fmtNum(p.home_points_proj)}` : '—'} />
+        <Stat k="Model total" v={fmtNum(p?.model_total)} />
+        <Stat k={`Total (${p?.total_book ?? 'none'})`} v={fmtNum(p?.book_total)} />
+        <Stat k="Total edge" v={fmtSigned(p?.total_edge)} cls={signClass(p?.total_edge)} />
+        <Stat k="Total pick" v={p?.total_pick ? `${p.total_pick === 'over' ? 'Over' : 'Under'} ${fmtNum(p.book_total)}` : '—'} />
+        <Stat k="Total win prob." v={fmtPct(p?.total_prob)} />
+      </div>
 
       <div className="grid">
         <div>
@@ -73,24 +81,26 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
           <h2>Line history</h2>
           <div className="tablewrap">
             <table>
-              <thead><tr><th>Captured</th><th>Book</th><th className="n">Home spread</th><th className="n">Price</th></tr></thead>
+              <thead><tr><th>Captured</th><th>Book</th><th className="n">Home spread</th><th className="n">Price</th><th className="n">Total</th><th className="n">O/U price</th></tr></thead>
               <tbody>
                 {(linesRes.data ?? []).map((l) => (
                   <tr key={l.id}>
                     <td className="muted">{fmtKick(l.captured_at)}</td><td>{l.book}</td>
-                    <td className="n">{fmtSpread(l.home_spread)}</td><td className="n muted">{fmtPrice(l.home_price)} / {fmtPrice(l.away_price)}</td>
+                    <td className="n">{fmtSpread(l.home_spread)}</td><td className="n muted">{l.home_spread != null ? `${fmtPrice(l.home_price)} / ${fmtPrice(l.away_price)}` : ''}</td>
+                    <td className="n">{fmtNum(l.total)}</td><td className="n muted">{l.total != null ? `${fmtPrice(l.over_price)} / ${fmtPrice(l.under_price)}` : ''}</td>
                   </tr>
                 ))}
-                {!linesRes.data?.length && <tr><td colSpan={4} className="muted">No lines captured yet.</td></tr>}
+                {!linesRes.data?.length && <tr><td colSpan={6} className="muted">No lines captured yet.</td></tr>}
               </tbody>
             </table>
           </div>
         </div>
       </div>
 
-      <h2>Log a bet</h2>
+      <h2>Log a spread bet</h2>
       <form action={addBet} className="card formgrid">
         <input type="hidden" name="game_id" value={g.id} />
+        <input type="hidden" name="market" value="spread" />
         <label>Team
           <select name="team_id" defaultValue={p?.pick_team_id ?? g.home_id}>
             <option value={g.away_id}>{away?.school}</option>
@@ -102,6 +112,24 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
             defaultValue={p?.book_home_spread != null ? (pickHome || !p?.pick_team_id ? p.book_home_spread : -p.book_home_spread) : ''} />
         </label>
         <label>Price<input name="price" type="number" defaultValue={(pickHome ? p?.book_home_price : p?.book_away_price) ?? -110} /></label>
+        <label>Stake (units)<input name="stake" type="number" step="0.1" defaultValue={1} /></label>
+        <label>Book<input name="book" defaultValue="draftkings" /></label>
+        <label>Notes<input name="notes" /></label>
+        <button type="submit">Save bet</button>
+      </form>
+
+      <h2>Log a total bet</h2>
+      <form action={addBet} className="card formgrid">
+        <input type="hidden" name="game_id" value={g.id} />
+        <input type="hidden" name="market" value="total" />
+        <label>Side
+          <select name="side" defaultValue={p?.total_pick ?? 'over'}>
+            <option value="over">Over</option>
+            <option value="under">Under</option>
+          </select>
+        </label>
+        <label>Total<input name="spread" type="number" step="0.5" required defaultValue={p?.book_total ?? ''} /></label>
+        <label>Price<input name="price" type="number" defaultValue={(p?.total_pick === 'under' ? p?.under_price : p?.over_price) ?? -110} /></label>
         <label>Stake (units)<input name="stake" type="number" step="0.1" defaultValue={1} /></label>
         <label>Book<input name="book" defaultValue="draftkings" /></label>
         <label>Notes<input name="notes" /></label>

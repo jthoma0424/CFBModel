@@ -148,3 +148,68 @@ export function fitWeights(X: number[][], homeFlag: number[], y: number[], lambd
 export function mean(xs: number[]) {
   return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
 }
+
+// ---------------------------------------------------------------------------
+// Totals
+// ---------------------------------------------------------------------------
+export type TotalEval = { side: 'over' | 'under'; edge: number; prob: number; ev: number; price: number };
+
+/** Compare a projected game total to a book total. Actual total ~ Normal(modelTotal, sigma). */
+export function evaluateTotal(modelTotal: number, bookTotal: number, sigma: number, overPrice = -110, underPrice = -110): TotalEval {
+  const overEdge = modelTotal - bookTotal;
+  const pOver = normCdf(overEdge / sigma);
+  const over = { side: 'over' as const, edge: overEdge, prob: pOver, ev: pOver * payout(overPrice) - (1 - pOver), price: overPrice };
+  const under = { side: 'under' as const, edge: -overEdge, prob: 1 - pOver, ev: (1 - pOver) * payout(underPrice) - pOver, price: underPrice };
+  return over.ev >= under.ev ? over : under;
+}
+
+export function gradeTotal(actualTotal: number, side: 'over' | 'under', bookTotal: number): 'win' | 'loss' | 'push' {
+  if (actualTotal === bookTotal) return 'push';
+  return (actualTotal > bookTotal) === (side === 'over') ? 'win' : 'loss';
+}
+
+export type TeamScore = { team: number; opp: number; points: number; loc: 1 | 0 | -1 }; // loc: 1 home, -1 away, 0 neutral
+
+/**
+ * In-house offense/defense ratings from points scored. For each team-game:
+ *   points − mu − loc·hfa/2 ≈ O_team + D_opp
+ * O = points scored above average vs. an average defense; D = points allowed above
+ * average vs. an average offense (higher D = worse defense). Ridge toward priors.
+ */
+export function scoringRatings(
+  rows: TeamScore[], priors: Map<number, { o: number; d: number }>,
+  opts: { mu: number; hfa: number; cap: number; lambda: number },
+): Map<number, { o: number; d: number }> {
+  const ids = new Set<number>();
+  for (const r of rows) { ids.add(r.team); ids.add(r.opp); }
+  for (const id of priors.keys()) ids.add(id);
+  const list = [...ids];
+  const idx = new Map(list.map((id, i) => [id, i]));
+  const n = list.length;
+  const N = 2 * n; // [O_0..O_n-1, D_0..D_n-1]
+  const A = Array.from({ length: N }, () => new Array(N).fill(0));
+  const b = new Array(N).fill(0);
+  for (const r of rows) {
+    const o = idx.get(r.team)!, d = n + idx.get(r.opp)!;
+    const y = capMargin(r.points - opts.mu - (r.loc * opts.hfa) / 2, opts.cap);
+    A[o][o] += 1; A[d][d] += 1; A[o][d] += 1; A[d][o] += 1;
+    b[o] += y; b[d] += y;
+  }
+  for (let i = 0; i < n; i++) {
+    const p = priors.get(list[i]) ?? { o: 0, d: 0 };
+    A[i][i] += opts.lambda; b[i] += opts.lambda * p.o;
+    A[n + i][n + i] += opts.lambda; b[n + i] += opts.lambda * p.d;
+  }
+  const x = solve(A, b);
+  return new Map(list.map((id, i) => [id, { o: x[i], d: x[n + i] }]));
+}
+
+/** Projected points for each side given offense/defense ratings. */
+export function projectScore(
+  home: { o: number; d: number }, away: { o: number; d: number }, mu: number, hfa: number, neutral: boolean,
+) {
+  const h = neutral ? 0 : hfa / 2;
+  const homePts = mu + home.o + away.d + h;
+  const awayPts = mu + away.o + home.d - h;
+  return { homePts, awayPts, total: homePts + awayPts, margin: homePts - awayPts };
+}

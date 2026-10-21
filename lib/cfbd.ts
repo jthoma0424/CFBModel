@@ -127,22 +127,39 @@ export async function syncGames(season: number) {
 export async function syncRatingsAndStats(season: number, week: number) {
   const resolver = await new NameResolver('cfbd').load();
   const now = new Date().toISOString();
-  const out: Record<string, number> = {};
+  const out: Record<string, number | string> = {};
+  const { data: srcRows } = await db().from('rating_sources').select('key,enabled');
+  const enabled = new Set((srcRows ?? []).filter((s) => s.enabled).map((s) => s.key));
 
-  const save = async (source: string, items: { team: string; rating: number | null; offense?: number | null; defense?: number | null; raw: any }[]) => {
-    const rows = items
-      .map((i) => ({ ...i, team_id: resolver.resolve(i.team) }))
-      .filter((i) => i.team_id && i.rating !== null && Number.isFinite(i.rating))
-      .map((i) => ({
-        season, week, source, team_id: i.team_id, rating: i.rating,
+  type Item = { team: string; rating: number | null; offense?: number | null; defense?: number | null; raw: any; logMiss?: boolean };
+  const save = async (source: string, items: Item[]) => {
+    // One row per team: two spellings that resolve to the same team would otherwise
+    // make the upsert fail ("cannot affect row a second time").
+    const byTeam = new Map<number, any>();
+    for (const i of items) {
+      if (i.rating === null || !Number.isFinite(i.rating)) continue;
+      const team_id = resolver.resolve(i.team, { logMiss: i.logMiss !== false });
+      if (!team_id || byTeam.has(team_id)) continue;
+      byTeam.set(team_id, {
+        season, week, source, team_id, rating: i.rating,
         offense: i.offense ?? null, defense: i.defense ?? null, raw: i.raw, fetched_at: now,
-      }));
-    await upsertChunked('source_ratings', rows, 'season,week,source,team_id');
-    out[source] = rows.length;
+      });
+    }
+    await upsertChunked('source_ratings', [...byTeam.values()], 'season,week,source,team_id');
+    out[source] = byTeam.size;
   };
 
   const settled = async (name: string, fn: () => Promise<void>) => {
-    try { await fn(); } catch (e: any) { out[`${name}_error`] = 1; console.error(name, e.message); }
+    if (['sp', 'fpi', 'srs', 'elo', 'wepa'].includes(name) && !enabled.has(name)) { out[name] = 'disabled'; return; }
+    try {
+      await fn();
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      out[`${name}_error`] = /\b(401|403)\b/.test(msg)
+        ? 'Not included in your CFBD plan (opponent-adjusted metrics need Patreon Tier 1, $1/mo). Turn this source off on Admin, or upgrade.'
+        : msg.slice(0, 200);
+      console.error(name, msg);
+    }
   };
 
   await settled('sp', async () => {
@@ -159,7 +176,11 @@ export async function syncRatingsAndStats(season: number, week: number) {
   });
   await settled('srs', async () => {
     const srs = await cfbd<any[]>('/ratings/srs', { year: season });
-    await save('srs', srs.map((r) => ({ team: r.team, rating: num(r.rating), raw: r })));
+    // SRS covers every division; keep FBS/FCS and don't flag lower-division names as unmatched.
+    const div = (r: any) => String(r.division ?? r.classification ?? '').toLowerCase();
+    await save('srs', srs
+      .filter((r) => !div(r) || ['fbs', 'fcs'].includes(div(r)))
+      .map((r) => ({ team: r.team, rating: num(r.rating), raw: r, logMiss: div(r) !== 'fcs' })));
   });
   await settled('elo', async () => {
     const elo = await cfbd<any[]>('/ratings/elo', { year: season });

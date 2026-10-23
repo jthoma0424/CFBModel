@@ -235,3 +235,21 @@ export function paceFactor(paceA: number, paceB: number, league: number, weight 
   const baseline = (paceA + paceB) / 2;
   return Math.pow(expected / baseline, weight);
 }
+
+// ---------------------------------------------------------------------------
+// Basketball (tempo-free) projection
+// ---------------------------------------------------------------------------
+export type CbbTeam = { o: number; d: number; t: number }; // o/d: points per 100 vs. average (d: allowed, higher = worse); t: possessions per game
+
+/**
+ * KenPom-style projection.
+ *   possessions = tempoA × tempoB / leagueTempo
+ *   points = possessions × (leagueEff + own offense + opponent defense) / 100 ± half the home-court edge
+ */
+export function cbbProject(home: CbbTeam, away: CbbTeam, leagueEff: number, leagueTempo: number, hca: number, neutral: boolean) {
+  const poss = (home.t * away.t) / leagueTempo;
+  const h = neutral ? 0 : hca / 2;
+  const homePts = (poss * (leagueEff + home.o + away.d)) / 100 + h;
+  const awayPts = (poss * (leagueEff + away.o + home.d)) / 100 - h;
+  return { poss, homePts, awayPts, margin: homePts - awayPts, total: homePts + awayPts };
+}

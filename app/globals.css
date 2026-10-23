@@ -55,3 +55,8 @@ pre.small { font-size: 11px; color: var(--muted); white-space: pre-wrap; margin:
 .tabs .tab:hover { color: var(--text); text-decoration: none; }
 .tabs .tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
 button:disabled { opacity: .6; cursor: wait; }
+.sport { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.sport a { padding: 4px 12px; color: var(--muted); font-size: 13px; }
+.sport a.on { background: var(--panel2); color: var(--text); font-weight: 600; }
+.sport a:hover { text-decoration: none; color: var(--text); }
+header.top nav a.here { color: var(--text); font-weight: 600; }

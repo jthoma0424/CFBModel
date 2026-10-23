@@ -79,6 +79,12 @@ export default async function Check() {
         ok: !paceErr,
         detail: paceErr ? 'Not run yet → paste supabase/migrations/0003_pace.sql into the Supabase SQL Editor and click Run.' : 'Installed',
       });
+      const { error: cbbErr } = await db.from('cbb_settings').select('id').limit(1);
+      rows.push({
+        name: 'Basketball update (0004_basketball.sql)',
+        ok: !cbbErr,
+        detail: cbbErr ? 'Not run yet → paste supabase/migrations/0004_basketball.sql into the Supabase SQL Editor and click Run.' : 'Installed',
+      });
     } catch (e: any) {
       rows.push({ name: 'Connect to Supabase', ok: false, detail: e?.message ?? String(e) });
     }

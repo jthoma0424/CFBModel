@@ -122,3 +122,15 @@ test('pace factor', () => {
   close(shrinkPace(160, 2, 140, 2), 150);
   assert.equal(paceFactor(0, 140, 140), 1);
 });
+
+import { cbbProject } from '../lib/model/math.ts';
+
+test('basketball projection', () => {
+  const avg = { o: 0, d: 0, t: 68 };
+  const p0 = cbbProject(avg, avg, 105, 68, 3, false);
+  close(p0.poss, 68); close(p0.total, 2 * 68 * 1.05); close(p0.margin, 3);
+  const good = { o: 10, d: -8, t: 72 }, bad = { o: -6, d: 5, t: 64 };
+  const p = cbbProject(good, bad, 105, 68, 3, true);
+  close(p.poss, 72 * 64 / 68);
+  close(p.homePts, p.poss * 120 / 100); close(p.awayPts, p.poss * 91 / 100);
+});

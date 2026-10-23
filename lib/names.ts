@@ -57,14 +57,17 @@ export class NameResolver {
   private misses = new Map<string, string>();
   private mascots = new Map<number, string>();
 
-  constructor(private source: string) {}
+  constructor(
+    private source: string,
+    private tables = { aliases: 'team_aliases', teams: 'teams', unmatched: 'unmatched_names' },
+  ) {}
 
   async load() {
     const rows = await selectAll<{ alias: string; team_id: number }>((a, b) =>
-      db().from('team_aliases').select('alias,team_id').range(a, b),
+      db().from(this.tables.aliases).select('alias,team_id').range(a, b),
     );
     for (const r of rows) this.map.set(r.alias, r.team_id);
-    const teams = await selectAll<{ id: number; mascot: string | null }>((a, b) => db().from('teams').select('id,mascot').range(a, b));
+    const teams = await selectAll<{ id: number; mascot: string | null }>((a, b) => db().from(this.tables.teams).select('id,mascot').range(a, b));
     for (const t of teams) if (t.mascot) this.mascots.set(t.id, normalizeName(t.mascot));
     return this;
   }
@@ -90,7 +93,7 @@ export class NameResolver {
     if (!this.misses.size) return;
     const now = new Date().toISOString();
     await upsertChunked(
-      'unmatched_names',
+      this.tables.unmatched,
       [...this.misses.keys()].map((raw_name) => ({ source: this.source, raw_name, last_seen: now, resolved: false })),
       'source,raw_name',
     );

@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { db } from '@/lib/supabase';
 import { JOBS, JobName, runJob } from '@/lib/pipeline';
-import { calibrate } from '@/lib/model/compute';
+import { buildPredictions, calibrate } from '@/lib/model/compute';
 import { currentSeason, currentWeek } from '@/lib/season';
 import { normalizeName } from '@/lib/names';
 import { parseManualCsv } from '@/lib/scrapers/parsers';
@@ -23,24 +23,31 @@ export async function runJobAction(form: FormData) {
 
 export async function saveSettings(form: FormData) {
   const n = (k: string) => Number(form.get(k));
-  await db().from('model_settings').update({
+  const res = await db().from('model_settings').update({
     hfa: n('hfa'), sigma: n('sigma'), edge_threshold: n('edge_threshold'),
     margin_cap: n('margin_cap'), prior_weight: n('prior_weight'), default_price: n('default_price'),
     total_sigma: n('total_sigma'), total_edge_threshold: n('total_edge_threshold'), points_cap: n('points_cap'),
     pace_weight: n('pace_weight'),
     updated_at: new Date().toISOString(),
   }).eq('id', 1);
-  redirect('/admin?saved=settings');
+  if (res.error) redirect(`/admin?error=${encodeURIComponent('Settings not saved: ' + res.error.message + ' (open /check to see which database update is missing)')}`);
+  // Re-flag this week's games right away with the new thresholds (no outside API calls).
+  const season = currentSeason();
+  const { week } = await currentWeek(season);
+  await buildPredictions(season, week);
+  revalidatePath('/', 'layout');
+  redirect('/admin?saved=settings and re-flagged this week');
 }
 
 export async function saveSources(form: FormData) {
   const keys = form.getAll('key').map(String);
   for (const key of keys) {
-    await db().from('rating_sources').update({
+    const res = await db().from('rating_sources').update({
       weight: Number(form.get(`weight_${key}`)),
       scale: Number(form.get(`scale_${key}`)),
       enabled: form.get(`enabled_${key}`) === 'on',
     }).eq('key', key);
+    if (res.error) redirect(`/admin?error=${encodeURIComponent('Sources not saved: ' + res.error.message)}`);
   }
   redirect('/admin?saved=sources');
 }

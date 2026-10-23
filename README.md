@@ -105,3 +105,22 @@ app/                                  Next.js pages and server actions
 ```
 
 *For research and entertainment. Bet responsibly.*
+
+---
+
+## College basketball
+
+Use the **Football / Basketball** switch in the header. Basketball has its own Slate (by date), Power Rankings, Performance, Bets and Admin pages, stored in separate `cbb_*` tables.
+
+- **Setup:** run `supabase/migrations/0004_basketball.sql` once, then open Basketball → Admin and click **Setup**, then **Daily**. Basketball uses the same CollegeFootballData key (shared quota), or a separate key in `CBBD_API_KEY`.
+- **Ratings (tempo-free):** adjusted offense and defense in points per 100 possessions, plus tempo in possessions per game. The model blends:
+  - an in-house opponent-adjusted efficiency model fit to this season's box scores (non-D1 opponents are pooled into one team)
+  - CollegeBasketballData's adjusted efficiency
+  - Bart Torvik's T-Rank (scraped CSV)
+  - optional pasted ratings, such as KenPom
+- **Preseason starting point:** last season's final ratings, regressed 40% toward average.
+- **Projection:** possessions = tempoA × tempoB / league tempo. Points = possessions × (league efficiency + offense + opponent's defense) / 100, ± half the home-court edge.
+- **Schedule (UTC):**
+  - `15:00` `cbb_daily`: games, ratings, lines, model
+  - `21:00` `cbb_lines`: DraftKings lines refresh and predictions rebuild before evening tips
+- **Predictions:** made for today and the next two days, and lock at tip-off.

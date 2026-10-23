@@ -34,6 +34,7 @@ export default async function Admin({ searchParams }: { searchParams: Promise<Re
     <>
       <h1>Admin</h1>
       <p className="sub">Season {season} · model week {week}{sp.ran ? ` · ran ${sp.ran}: ${sp.ok === '1' ? 'ok' : 'error (see log)'}` : ''}{sp.saved ? ` · saved ${sp.saved}` : ''}</p>
+      {sp.error && <div className="card neg" style={{ marginBottom: 12 }}>{sp.error}</div>}
 
       <h2>Run jobs</h2>
       <div className="card" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>

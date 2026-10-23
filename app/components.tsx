@@ -3,7 +3,7 @@ import Link from 'next/link';
 
 export type TeamLite = { id: number; school: string; logo?: string | null; conference?: string | null };
 
-export function Team({ t, link = true }: { t?: TeamLite | null; link?: boolean }) {
+export function Team({ t, link = true, base = '/team' }: { t?: TeamLite | null; link?: boolean; base?: string }) {
   if (!t) return <span className="muted">—</span>;
   const inner = (
     <span className="team">
@@ -11,7 +11,7 @@ export function Team({ t, link = true }: { t?: TeamLite | null; link?: boolean }
       {t.school}
     </span>
   );
-  return link ? <Link href={`/team/${t.id}`}>{inner}</Link> : inner;
+  return link ? <Link href={`${base}/${t.id}`}>{inner}</Link> : inner;
 }
 
 /** GET form so week selection lives in the URL. */

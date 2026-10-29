@@ -253,3 +253,36 @@ export function cbbProject(home: CbbTeam, away: CbbTeam, leagueEff: number, leag
   const awayPts = (poss * (leagueEff + away.o + home.d)) / 100 - h;
   return { poss, homePts, awayPts, margin: homePts - awayPts, total: homePts + awayPts };
 }
+
+// ---------------------------------------------------------------------------
+// Manual adjustments
+// ---------------------------------------------------------------------------
+export type Adjustment = { id: number; sport: string; team_id: number; points: number; note: string | null; start_date: string; end_date: string | null };
+
+/** Share of an adjustment that comes off the team's own scoring; the rest goes to the opponent. */
+export const OFFENSE_SHARE = 0.7;
+
+/** Eastern-time date (YYYY-MM-DD) of a game start. */
+function gameDay(start: string | null): string {
+  return new Date(start ?? Date.now()).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
+/** Total adjustment and notes in effect for a team on a game's date. */
+export function adjustmentFor(adjs: Adjustment[], teamId: number, start: string | null) {
+  const day = gameDay(start);
+  const hits = adjs.filter((a) => a.team_id === teamId && a.start_date <= day && (!a.end_date || a.end_date >= day));
+  return { points: hits.reduce((s, a) => s + a.points, 0), notes: hits.map((a) => a.note).filter(Boolean) as string[] };
+}
+
+/**
+ * Apply home/away adjustments to a projection. The margin moves by the full difference;
+ * each team's points move by 70% of its own adjustment and 30% of the opponent's (inverted),
+ * so e.g. a -7 QB-out adjustment takes ~5 points off that team and adds ~2 to the opponent.
+ */
+export function applyAdjustments(adjHome: number, adjAway: number) {
+  return {
+    margin: adjHome - adjAway,
+    homePts: OFFENSE_SHARE * adjHome - (1 - OFFENSE_SHARE) * adjAway,
+    awayPts: OFFENSE_SHARE * adjAway - (1 - OFFENSE_SHARE) * adjHome,
+  };
+}

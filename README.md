@@ -124,3 +124,13 @@ Use the **Football / Basketball** switch in the header. Basketball has its own S
   - `15:00` `cbb_daily`: games, ratings, lines, model
   - `21:00` `cbb_lines`: DraftKings lines refresh and predictions rebuild before evening tips
 - **Predictions:** made for today and the next two days, and lock at tip-off.
+
+---
+
+## Manual team adjustments
+
+Run `supabase/migrations/0005_adjustments.sql` once. On **Admin** (football) or **Basketball → Admin**, under **Manual team adjustments**:
+- Pick a team and enter the points, such as -7 for a starting QB out, with an optional note and date range.
+- The spread moves by the full amount. About 70% comes off that team's projected points and 30% is added to the opponent's, so totals move too.
+- Predictions re-run immediately, and adjusted games show an **ADJ** badge on the Slate.
+- Games that have already started keep their locked numbers.

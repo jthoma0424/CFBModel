@@ -11,9 +11,10 @@ import { buildCbbPredictions, computeCbbRatings, gradeCbb } from './cbb/model';
 export const JOBS = ['setup', 'cfbd', 'scrape', 'odds', 'model', 'daily', 'cbb_setup', 'cbb_daily', 'cbb_lines', 'cbb_model'] as const;
 export type JobName = (typeof JOBS)[number];
 
+let weekOverride: number | null = null;
 async function ctx() {
   const season = currentSeason();
-  const { week } = await currentWeek(season);
+  const week = weekOverride ?? (await currentWeek(season)).week;
   return { season, week };
 }
 
@@ -31,7 +32,17 @@ async function ctx() {
  * cbb_lines – DraftKings lines + model only (afternoon refresh before evening tips)
  * cbb_model – grade, rebuild ratings, update predictions
  */
-export async function runJob(job: JobName) {
+/** Run a job; `opts.week` forces football jobs to use that week instead of the current one. */
+export async function runJob(job: JobName, opts: { week?: number } = {}): Promise<any> {
+  if (opts.week && opts.week > 0) {
+    const prev = weekOverride;
+    weekOverride = opts.week;
+    try { return await runJobInner(job); } finally { weekOverride = prev; }
+  }
+  return runJobInner(job);
+}
+
+async function runJobInner(job: JobName): Promise<any> {
   switch (job) {
     case 'setup':
       return runLogged('setup', async () => {

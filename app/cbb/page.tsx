@@ -90,7 +90,7 @@ export default async function CbbSlate({ searchParams }: { searchParams: Promise
                     <td className="n">{fmtNum(p?.book_total)} <span className="muted">{p?.book_total != null ? `${fmtPrice(p.over_price)}/${fmtPrice(p.under_price)}` : ''}</span></td>
                     <td className={`n ${signClass(p?.total_edge)}`}>{fmtSigned(p?.total_edge)}</td>
                     <td>{p?.total_pick ? <Link href={`/cbb/game/${g.id}`}>{p.total_pick === 'over' ? 'Over' : 'Under'} {fmtNum(p.book_total)}</Link> : <Link href={`/cbb/game/${g.id}`} className="muted">details</Link>}
-                      {p?.total_is_play ? <> <span className="badge play">PLAY</span></> : null}</td>
+                      {p?.total_is_play ? <> <span className="badge play">PLAY</span></> : null}{p?.adj_note || Number(p?.adj_home) || Number(p?.adj_away) ? <> <span className="badge warn" title={p.adj_note ?? 'manual adjustment'}>ADJ</span></> : null}</td>
                     <td className="n">{fmtPct(p?.total_prob)}</td>
                     <td className={`n ${signClass(p?.total_ev)}`}>{fmtSigned(p?.total_ev, 3)}</td>
                     <td>{score} {res}</td>
@@ -105,7 +105,7 @@ export default async function CbbSlate({ searchParams }: { searchParams: Promise
                     <td className="n">{fmtSpread(p?.book_home_spread)} <span className="muted">{fmtPrice(p?.book_home_price)}</span></td>
                     <td className={`n ${signClass(p?.edge)}`}>{fmtSigned(p?.edge)}</td>
                     <td>{pickTeam ? <Link href={`/cbb/game/${g.id}`}>{pickTeam.school} {fmtSpread(p.pick_spread)}</Link> : <Link href={`/cbb/game/${g.id}`} className="muted">details</Link>}
-                      {p?.is_play ? <> <span className="badge play">PLAY</span></> : null}</td>
+                      {p?.is_play ? <> <span className="badge play">PLAY</span></> : null}{p?.adj_note || Number(p?.adj_home) || Number(p?.adj_away) ? <> <span className="badge warn" title={p.adj_note ?? 'manual adjustment'}>ADJ</span></> : null}</td>
                     <td className="n">{fmtPct(p?.cover_prob)}</td>
                     <td className={`n ${signClass(p?.ev)}`}>{fmtSigned(p?.ev, 3)}</td>
                     <td>{score} {res}</td>

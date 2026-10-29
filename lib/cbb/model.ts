@@ -1,6 +1,7 @@
 import { db, selectAll, upsertChunked } from '../supabase';
 import { betProfit, cbbProject, evaluateSpread, evaluateTotal, gradeSpread, gradeTotal, mean, scoringRatings, shrinkPace } from '../model/math';
 import { addDays, etDate } from './ingest';
+import { adjustmentFor, applyAdjustments, loadAdjustments } from '../adjustments';
 
 export type CbbSettings = {
   hca: number; sigma: number; edge_threshold: number; total_sigma: number; total_edge_threshold: number;
@@ -179,13 +180,20 @@ export async function buildCbbPredictions(season: number, today = etDate()) {
     (await selectAll<any>((a, b) => db().from('cbb_predictions').select('game_id,frozen').gte('game_date', today).range(a, b))).map((p) => [p.game_id, p]),
   );
 
+  const adjCheck = await db().from('team_adjustments').select('id').limit(1);
+  const hasAdj = !adjCheck.error;
+  const adjs = hasAdj ? await loadAdjustments('cbb') : [];
   const now = Date.now();
   const rows: any[] = [], freeze: number[] = [];
   for (const g of games) {
     if (existing.get(g.id)?.frozen) continue;
     if (g.start_date && new Date(g.start_date).getTime() <= now) { if (existing.has(g.id)) freeze.push(g.id); continue; }
     const h = team.get(g.home_id) ?? fallback, a = team.get(g.away_id) ?? fallback;
-    const p = cbbProject(h, a, mu, L, s.hca, !!g.neutral_site);
+    const base = cbbProject(h, a, mu, L, s.hca, !!g.neutral_site);
+    const ah = adjustmentFor(adjs, g.home_id, g.start_date), aa = adjustmentFor(adjs, g.away_id, g.start_date);
+    const adj = applyAdjustments(ah.points, aa.points);
+    const homePts = base.homePts + adj.homePts, awayPts = base.awayPts + adj.awayPts;
+    const p = { ...base, homePts, awayPts, margin: homePts - awayPts, total: homePts + awayPts };
     const row: any = {
       game_id: g.id, season, game_date: g.game_date, home_net: r2(h.net), away_net: r2(a.net),
       possessions_proj: r2(p.poss), home_points_proj: r1(p.homePts), away_points_proj: r1(p.awayPts),
@@ -195,6 +203,7 @@ export async function buildCbbPredictions(season: number, today = etDate()) {
       total_book: null, book_total: null, over_price: null, under_price: null, total_pick: null, total_edge: null, total_prob: null, total_ev: null, total_is_play: false,
       updated_at: new Date().toISOString(),
     };
+    if (hasAdj) Object.assign(row, { adj_home: ah.points, adj_away: aa.points, adj_note: [...ah.notes, ...aa.notes].join('; ') || null });
     const sl = pick(g.id, 'home_spread');
     if (sl) {
       const hp = sl.home_price ?? s.default_price, ap = sl.away_price ?? s.default_price;

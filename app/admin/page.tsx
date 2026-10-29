@@ -5,6 +5,7 @@ import { teamMap } from '@/lib/queries';
 import { applyCalibration, calibrateAction, ignoreAlias, importManual, mapAlias, runJobAction, saveSettings, saveSources } from '../actions';
 import { fmtKick } from '@/lib/format';
 import { RunButton } from './run-button';
+import { AdjustmentsPanel } from '../adjustments-panel';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -46,6 +47,20 @@ export default async function Admin({ searchParams }: { searchParams: Promise<Re
         ))}
       </div>
       <p className="sub" style={{ marginTop: 6 }}>{JOB_HELP.map(([j, h]) => `${j}: ${h}`).join('  ·  ')}</p>
+      <form action={runJobAction} className="card inline" style={{ marginTop: 8 }}>
+        <span className="muted">Run for a specific week:</span>
+        <select name="job" defaultValue="daily">
+          <option value="daily">Daily</option>
+          <option value="model">Model</option>
+          <option value="cfbd">Cfbd</option>
+          <option value="odds">Odds</option>
+        </select>
+        <label style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>Week<input name="week" type="number" min="1" max="20" defaultValue={week} style={{ width: 70 }} /></label>
+        <RunButton label="Run" />
+        <span className="muted">The model normally moves to the next week by itself once the current week's last game kicks off.</span>
+      </form>
+
+      <AdjustmentsPanel sport="cfb" teams={[...teams.values()].filter((t) => t.classification === 'fbs').sort((a, b) => a.school.localeCompare(b.school))} />
 
       <h2>Recent job runs</h2>
       <div className="tablewrap">

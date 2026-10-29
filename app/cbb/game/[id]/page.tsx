@@ -30,6 +30,12 @@ export default async function CbbGame({ params }: { params: Promise<{ id: string
     <>
       <h1><Team t={away} base="/cbb/team" /> @ <Team t={home} base="/cbb/team" /></h1>
       <p className="sub">{fmtKick(g.start_date)}{g.neutral_site ? ' · Neutral site' : ''}{g.tournament ? ` · ${g.tournament}` : ''}{g.completed ? ` · Final ${g.away_points}-${g.home_points}` : ''}</p>
+      {(Number(p?.adj_home) || Number(p?.adj_away)) ? (
+        <div className="card warn" style={{ marginBottom: 12 }}>
+          Manual adjustment applied: {Number(p.adj_away) ? `${away?.school} ${Number(p.adj_away) > 0 ? '+' : ''}${p.adj_away}` : ''}{Number(p.adj_away) && Number(p.adj_home) ? ', ' : ''}{Number(p.adj_home) ? `${home?.school} ${Number(p.adj_home) > 0 ? '+' : ''}${p.adj_home}` : ''}
+          {p.adj_note ? ` (${p.adj_note})` : ''}. Change it on the Admin page.
+        </div>
+      ) : null}
       <div className="stats">
         <Stat k="Model spread (home)" v={fmtSpread(p?.model_spread)} />
         <Stat k="DraftKings (home)" v={fmtSpread(p?.book_home_spread)} />

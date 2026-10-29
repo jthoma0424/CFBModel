@@ -4,6 +4,7 @@ import { getCbbSettings, getCbbSources } from '@/lib/cbb/model';
 import { cbbTeamMap } from '@/lib/cbb/queries';
 import { ignoreCbbAlias, importCbbRatings, mapCbbAlias, runCbbJob, saveCbbSettings, saveCbbSources } from '../actions';
 import { RunButton } from '../../admin/run-button';
+import { AdjustmentsPanel } from '../../adjustments-panel';
 import { fmtKick } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
@@ -40,6 +41,8 @@ export default async function CbbAdmin({ searchParams }: { searchParams: Promise
         ))}
       </div>
       <p className="sub" style={{ marginTop: 6 }}>{JOBS.map(([, l, h]) => `${l}: ${h}`).join('  ·  ')}</p>
+
+      <AdjustmentsPanel sport="cbb" teams={d1} />
 
       <h2>Recent basketball job runs</h2>
       <div className="tablewrap"><table>

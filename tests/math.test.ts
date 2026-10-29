@@ -134,3 +134,12 @@ test('basketball projection', () => {
   close(p.poss, 72 * 64 / 68);
   close(p.homePts, p.poss * 120 / 100); close(p.awayPts, p.poss * 91 / 100);
 });
+
+import { applyAdjustments } from '../lib/model/math.ts';
+
+test('manual adjustments', () => {
+  const a = applyAdjustments(-7, 0); // home QB out
+  close(a.margin, -7); close(a.homePts, -4.9); close(a.awayPts, 2.1); close(a.homePts - a.awayPts, -7);
+  const b = applyAdjustments(-3, -5);
+  close(b.margin, 2); close(b.homePts - b.awayPts, 2);
+});

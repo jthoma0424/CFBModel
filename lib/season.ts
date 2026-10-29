@@ -11,6 +11,13 @@ export function currentSeason(now = new Date()): number {
  * week N use only results through week N-1.
  */
 export async function currentWeek(season: number, now = new Date()): Promise<{ week: number; seasonType: string }> {
+  // Preferred: the week of the next game that hasn't been played yet. This rolls over
+  // as soon as the last game of a week kicks off, instead of waiting for the calendar.
+  const cutoff = new Date(now.getTime() - 6 * 3600e3).toISOString();
+  const next = await db().from('games').select('week,season_type').eq('season', season).eq('completed', false)
+    .gt('start_date', cutoff).order('start_date', { ascending: true }).limit(1);
+  if (next.data?.length) return { week: next.data[0].week, seasonType: next.data[0].season_type ?? 'regular' };
+
   const { data } = await db()
     .from('calendar')
     .select('week,season_type,start_date,end_date')

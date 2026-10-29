@@ -85,6 +85,12 @@ export default async function Check() {
         ok: !cbbErr,
         detail: cbbErr ? 'Not run yet → paste supabase/migrations/0004_basketball.sql into the Supabase SQL Editor and click Run.' : 'Installed',
       });
+      const { error: adjErr } = await db.from('team_adjustments').select('id').limit(1);
+      rows.push({
+        name: 'Adjustments update (0005_adjustments.sql)',
+        ok: !adjErr,
+        detail: adjErr ? 'Not run yet → paste supabase/migrations/0005_adjustments.sql into the Supabase SQL Editor and click Run.' : 'Installed',
+      });
     } catch (e: any) {
       rows.push({ name: 'Connect to Supabase', ok: false, detail: e?.message ?? String(e) });
     }

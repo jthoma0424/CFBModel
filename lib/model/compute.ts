@@ -1,4 +1,5 @@
 import { db, selectAll, upsertChunked } from '../supabase';
+import { adjustmentFor, applyAdjustments, loadAdjustments } from '../adjustments';
 import { betProfit, evaluateSpread, evaluateTotal, fitWeights, gradeSpread, gradeTotal, mean, movRatings, paceFactor, projectScore, scoringRatings, shrinkPace } from './math';
 
 export type Settings = {
@@ -252,6 +253,9 @@ export async function buildPredictions(season: number, week: number) {
     }
     return null;
   };
+  const adjCheck = await db().from('team_adjustments').select('id').limit(1);
+  const hasAdj = !adjCheck.error; // false until 0005_adjustments.sql is run
+  const adjs = hasAdj ? await loadAdjustments('cfb') : [];
   const now = Date.now();
   const rows: any[] = [];
   const freeze: number[] = [];
@@ -265,7 +269,10 @@ export async function buildPredictions(season: number, week: number) {
     const hr = ratings.get(g.home_id) ?? null;
     const ar = ratings.get(g.away_id) ?? null;
     if (hr === null || ar === null) continue;
-    const margin = hr - ar + (g.neutral_site ? 0 : s.hfa);
+    // Manual adjustments (injuries etc.) in effect on game day
+    const ah = adjustmentFor(adjs, g.home_id, g.start_date), aa = adjustmentFor(adjs, g.away_id, g.start_date);
+    const adj = applyAdjustments(ah.points, aa.points);
+    const margin = hr - ar + (g.neutral_site ? 0 : s.hfa) + adj.margin;
     const row: any = {
       game_id: g.id, season, week, home_rating: hr, away_rating: ar,
       model_margin: round(margin), model_spread: round(-margin),
@@ -276,6 +283,7 @@ export async function buildPredictions(season: number, week: number) {
       total_pick: null, total_edge: null, total_prob: null, total_ev: null, total_is_play: false,
       updated_at: new Date().toISOString(),
     };
+    if (hasAdj) Object.assign(row, { adj_home: ah.points, adj_away: aa.points, adj_note: [...ah.notes, ...aa.notes].join('; ') || null });
     const line = pickLine(g.id, 'home_spread');
     if (line) {
       const hp = line.home_price ?? s.default_price, ap = line.away_price ?? s.default_price;
@@ -294,7 +302,8 @@ export async function buildPredictions(season: number, week: number) {
       const pf = leaguePace > 0 && s.pace_weight > 0
         ? paceFactor(paceMap.get(g.home_id) ?? leaguePace, paceMap.get(g.away_id) ?? leaguePace, leaguePace, s.pace_weight)
         : 1;
-      const proj = { homePts: base.homePts * pf, awayPts: base.awayPts * pf, total: base.total * pf };
+      const homePts = base.homePts * pf + adj.homePts, awayPts = base.awayPts * pf + adj.awayPts;
+      const proj = { homePts, awayPts, total: homePts + awayPts };
       Object.assign(row, {
         home_points_proj: round(proj.homePts, 1), away_points_proj: round(proj.awayPts, 1), model_total: round(proj.total, 1), pace_factor: round(pf, 3),
       });

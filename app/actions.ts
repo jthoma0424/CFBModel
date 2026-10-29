@@ -16,9 +16,10 @@ import { saveScraped } from '@/lib/scrapers';
 export async function runJobAction(form: FormData) {
   const job = String(form.get('job')) as JobName;
   if (!JOBS.includes(job)) throw new Error('bad job');
-  const result = await runJob(job);
+  const week = Number(form.get('week') || 0);
+  const result = await runJob(job, week > 0 ? { week } : {});
   revalidatePath('/', 'layout');
-  redirect(`/admin?ran=${job}&ok=${result?.ok ? 1 : 0}`);
+  redirect(`/admin?ran=${job}${week > 0 ? ` (week ${week})` : ''}&ok=${result?.ok ? 1 : 0}`);
 }
 
 export async function saveSettings(form: FormData) {
@@ -112,4 +113,44 @@ export async function addBet(form: FormData) {
 export async function deleteBet(form: FormData) {
   await db().from('bets').delete().eq('id', Number(form.get('id')));
   revalidatePath('/bets');
+}
+
+// ---------------------------------------------------------------------------
+// Manual team adjustments (both sports)
+// ---------------------------------------------------------------------------
+async function rebuildFor(sport: string) {
+  if (sport === 'cbb') {
+    const { cbbCurrentSeason } = await import('@/lib/cbb/ingest');
+    const { buildCbbPredictions } = await import('@/lib/cbb/model');
+    await buildCbbPredictions(await cbbCurrentSeason());
+  } else {
+    const season = currentSeason();
+    const { week } = await currentWeek(season);
+    await buildPredictions(season, week);
+  }
+}
+
+export async function addAdjustment(form: FormData) {
+  const sport = form.get('sport') === 'cbb' ? 'cbb' : 'cfb';
+  const back = sport === 'cbb' ? '/cbb/admin' : '/admin';
+  const teamId = Number(form.get('team_id')), points = Number(form.get('points'));
+  if (!teamId || !Number.isFinite(points) || points === 0) redirect(`${back}?error=${encodeURIComponent('Pick a team and enter a non-zero number of points.')}#adjustments`);
+  const res = await db().from('team_adjustments').insert({
+    sport, team_id: teamId, points,
+    note: String(form.get('note') || '') || null,
+    start_date: String(form.get('start_date') || '') || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }),
+    end_date: String(form.get('end_date') || '') || null,
+  });
+  if (res.error) redirect(`${back}?error=${encodeURIComponent('Adjustment not saved: ' + res.error.message + ' (run 0005_adjustments.sql in Supabase)')}#adjustments`);
+  await rebuildFor(sport);
+  revalidatePath('/', 'layout');
+  redirect(`${back}?saved=adjustment and re-ran predictions#adjustments`);
+}
+
+export async function deleteAdjustment(form: FormData) {
+  const sport = form.get('sport') === 'cbb' ? 'cbb' : 'cfb';
+  await db().from('team_adjustments').delete().eq('id', Number(form.get('id')));
+  await rebuildFor(sport);
+  revalidatePath('/', 'layout');
+  redirect(`${sport === 'cbb' ? '/cbb/admin' : '/admin'}?saved=removed adjustment#adjustments`);
 }

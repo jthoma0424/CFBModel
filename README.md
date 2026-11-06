@@ -13,6 +13,7 @@ A private college football betting model. It pulls advanced stats and computer r
    - **From CFBD:** SP+, FPI, SRS, Elo, opponent-adjusted EPA, and advanced stats (success rate, explosiveness, havoc, and more).
    - **Scraped:** Sagarin Predictor and FEI.
    - **In-house MOV rating:** ridge regression on capped game margins, pulled toward the external composite. This keeps early-season numbers stable.
+   - **In-house EPA (`tcc_epa`):** built from CFBD play-by-play the way cfbscrapR/cfbfastR do it. Scrimmage plays only, garbage time removed, then EPA/play, success rate and explosiveness are opponent-adjusted. Also feeds offense/defense for totals.
 2. **Normalize.** Each source is centered on the average FBS team and multiplied by its `scale`. Everything ends up in points: "X points better than an average FBS team on a neutral field."
 3. **Blend.** The power rating is a weighted mean of whichever sources a team has. You set the weights on the Admin page, or fit them with **Calibrate**.
 4. **Project.** Home margin = home rating − away rating + HFA (no HFA at neutral sites). The model's home spread is the negative of that margin.
@@ -78,12 +79,13 @@ You can also start any job by hand: `curl -H "Authorization: Bearer $CRON_SECRET
 | **Game** | Source-by-source breakdown, line movement across books, and a bet logging form |
 | **Performance** | ATS by edge bucket and by week, units, and model vs. line accuracy |
 | **Bets** | Your logged bets, auto-graded, with record, units, and ROI |
-| **Admin** | Run jobs, job log, model settings, source weights and scales, calibration, team-name fixes, and CSV import |
+| **Admin** | Run jobs, job log, model settings, source weights and scales, team-name fixes, and CSV import |
+| **Blend lab** | Tests every source and blend against actual margins and points scored, next to the DK line, and can save a better blend |
 
 ## Ongoing care
 - **Unmatched team names.** Different sites spell teams differently. Any name that couldn't be matched shows up on Admin; map it once and it's remembered. Common variants are pre-seeded in `lib/names.ts`.
 - **Scrapers break when a site's layout changes.** The job log will say "parsed 0 rows". To fix it or add a site, edit `lib/scrapers/index.ts` and add a matching row to `rating_sources`. For sites that load their data with JavaScript (such as Massey), copy the table and paste it into **Import ratings** on Admin.
-- **Calibrate** once about 50 or more games have stored pregame ratings (roughly week 4 or later). It fits blend weights, HFA, and σ using only pregame data.
+- **Blend lab** (Admin → Open Blend lab) once about 60 or more FBS games have stored pregame ratings. See below.
 - **Early season** leans on preseason SP+/FPI, which include returning production and recruiting. Use a higher play threshold in weeks 1–3.
 
 ## Tests
@@ -96,6 +98,7 @@ npm test        # model math, ATS grading, rating regression, weight fitting, pa
 supabase/migrations/0001_schema.sql   tables, views, RLS, seed config
 lib/cfbd.ts                           CFBD client: teams, calendar, games, ratings, stats, lines
 lib/odds.ts                           The Odds API (DraftKings) to games matching
+lib/pbp.ts                            play-by-play sync and in-house EPA ratings (tcc_epa)
 lib/scrapers/                         Sagarin, FEI, generic table and CSV parsers
 lib/names.ts                          team-name normalization and alias resolution
 lib/model/math.ts                     pure math (cover prob, EV, MOV ridge, weight fit)
@@ -134,3 +137,35 @@ Run `supabase/migrations/0005_adjustments.sql` once. On **Admin** (football) or 
 - The spread moves by the full amount. About 70% comes off that team's projected points and 30% is added to the opponent's, so totals move too.
 - Predictions re-run immediately, and adjusted games show an **ADJ** badge on the Slate.
 - Games that have already started keep their locked numbers.
+
+---
+
+## Blend lab
+
+Run `supabase/migrations/0006_blend.sql` once. Then open **Admin → Open Blend lab** and click **Run blend test**.
+
+It rebuilds each past week's ratings exactly as they stood before kickoff, then checks them against what happened:
+- **Spreads:** actual final margin vs. your current blend, equal weights, a fitted blend, each source on its own, and the DraftKings line.
+- **Totals:** actual points each team scored vs. the offense/defense sources and DK's implied team total.
+
+What the columns mean:
+- **Slope:** regression of the actual result on a source's prediction. 1.0 means its point gaps are the right size; below 1 means they're too big, which inflates edges.
+- **Beyond-line score:** when a method disagreed with DK, the share of that disagreement that showed up in the result. Near 0 means the edges were noise.
+- **Fitted blend (held out):** each week is predicted by a fit that never saw that week. Weights are pulled toward equal weights so a small sample can't swing them wildly.
+
+**Apply spread blend** saves the source weights, HFA, σ, and a spread slope. **Apply totals blend** saves separate totals weights (the new Totals weight column on Admin) and a points slope. Both rebuild this week's predictions. **Reset to original weights** undoes them.
+
+---
+
+## In-house play-by-play ratings (cfbscrapR-style)
+
+Run `supabase/migrations/0007_pbp.sql` once. Then click **Pbp** on Admin (or just let **Daily** run it).
+
+- **Data:** CFBD play-by-play, one API call per week. EPA per play is CFBD's `ppa`.
+- **Filtering:** scrimmage snaps only (no kicks, punts, penalties, kneels or timeouts). Garbage time is dropped: lead over 38 in Q2, over 28 in Q3, over 22 in Q4.
+- **Per team per game:** plays, EPA, success rate (50% of yards needed on 1st down, 70% on 2nd, 100% on 3rd/4th), explosiveness (EPA on successful plays), and rush/pass EPA. Stored in `team_game_pbp`.
+- **Opponent adjustment:** a weighted ridge regression, value ≈ average + home edge + offense + opponent defense. FCS opponents are pooled into one team, and shrinkage is about 2 games' worth of plays.
+- **Snapshots:** a rating is saved for every week using only earlier games. History goes back to week 2, so the Blend lab can test it fairly.
+- **The first run** backfills 4 weeks at a time. Click **Pbp** a couple of times, or let Daily catch up over a few days.
+- **Rating:** net adjusted EPA/play × 60 ≈ points. Its offense and defense also blend into totals. Check its slope in the Blend lab before giving it more weight.
+- **The Team page** shows the adjusted offense and defense numbers with FBS ranks.

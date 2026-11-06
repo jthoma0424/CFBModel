@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { db } from '@/lib/supabase';
 import { JOBS, JobName, runJob } from '@/lib/pipeline';
 import { buildPredictions, calibrate } from '@/lib/model/compute';
+import { runBlendLab } from '@/lib/model/blend-lab';
 import { currentSeason, currentWeek } from '@/lib/season';
 import { normalizeName } from '@/lib/names';
 import { parseManualCsv } from '@/lib/scrapers/parsers';
@@ -28,7 +29,7 @@ export async function saveSettings(form: FormData) {
     hfa: n('hfa'), sigma: n('sigma'), edge_threshold: n('edge_threshold'),
     margin_cap: n('margin_cap'), prior_weight: n('prior_weight'), default_price: n('default_price'),
     total_sigma: n('total_sigma'), total_edge_threshold: n('total_edge_threshold'), points_cap: n('points_cap'),
-    pace_weight: n('pace_weight'),
+    pace_weight: n('pace_weight'), margin_slope: n('margin_slope') || 1, points_slope: n('points_slope') || 1,
     updated_at: new Date().toISOString(),
   }).eq('id', 1);
   if (res.error) redirect(`/admin?error=${encodeURIComponent('Settings not saved: ' + res.error.message + ' (open /check to see which database update is missing)')}`);
@@ -47,6 +48,7 @@ export async function saveSources(form: FormData) {
       weight: Number(form.get(`weight_${key}`)),
       scale: Number(form.get(`scale_${key}`)),
       enabled: form.get(`enabled_${key}`) === 'on',
+      ...(form.has(`total_weight_${key}`) ? { total_weight: String(form.get(`total_weight_${key}`)).trim() === '' ? null : Number(form.get(`total_weight_${key}`)) } : {}),
     }).eq('key', key);
     if (res.error) redirect(`/admin?error=${encodeURIComponent('Sources not saved: ' + res.error.message)}`);
   }
@@ -66,6 +68,58 @@ export async function applyCalibration(form: FormData) {
   }
   await db().from('model_settings').update({ hfa: detail.hfa, sigma: detail.sigma }).eq('id', 1);
   redirect('/admin?saved=calibration');
+}
+
+// ---------------------------------------------------------------------------
+// Blend lab
+// ---------------------------------------------------------------------------
+const NEEDS_0006 = 'Run supabase/migrations/0006_blend.sql in the Supabase SQL Editor first.';
+
+export async function runBlendLabAction() {
+  let r: any;
+  try { r = await runBlendLab(currentSeason()); } catch (e: any) { r = { ok: false, message: e?.message ?? String(e) }; }
+  await db().from('job_runs').insert({ job: 'blend_lab', status: r.ok ? 'ok' : 'error', finished_at: new Date().toISOString(), detail: r });
+  redirect('/admin/blend');
+}
+
+async function rebuildAfterWeightChange(msg: string) {
+  const result = await runJob('model');
+  revalidatePath('/', 'layout');
+  redirect(`/admin/blend?saved=${encodeURIComponent(msg + (result?.ok ? ' and rebuilt this week\'s ratings and predictions' : ' (rebuild failed, see Admin job log)'))}`);
+}
+
+/** Save what the latest Blend lab run recommends (spreads, totals, or both). */
+export async function applyBlend(form: FormData) {
+  const part = String(form.get('part')); // 'spreads' | 'totals'
+  const { data } = await db().from('job_runs').select('detail').eq('job', 'blend_lab').eq('status', 'ok').order('started_at', { ascending: false }).limit(1);
+  const a = data?.[0]?.detail?.apply;
+  if (!a) redirect('/admin/blend?error=' + encodeURIComponent('Run the blend test first.'));
+  if (part === 'spreads') {
+    for (const [key, w] of Object.entries(a.weights as Record<string, number>)) await db().from('rating_sources').update({ weight: w }).eq('key', key);
+    const res = await db().from('model_settings').update({ hfa: a.hfa, sigma: a.sigma, margin_slope: a.margin_slope }).eq('id', 1);
+    if (res.error) redirect('/admin/blend?error=' + encodeURIComponent(NEEDS_0006));
+    await rebuildAfterWeightChange('Applied spread weights');
+  } else if (part === 'totals' && a.total_weights) {
+    for (const [key, w] of Object.entries(a.total_weights as Record<string, number>)) {
+      const res = await db().from('rating_sources').update({ total_weight: w }).eq('key', key);
+      if (res.error) redirect('/admin/blend?error=' + encodeURIComponent(NEEDS_0006));
+    }
+    const res = await db().from('model_settings').update({ points_slope: a.points_slope, ...(a.total_sigma ? { total_sigma: a.total_sigma } : {}) }).eq('id', 1);
+    if (res.error) redirect('/admin/blend?error=' + encodeURIComponent(NEEDS_0006));
+    await rebuildAfterWeightChange('Applied totals weights');
+  }
+  redirect('/admin/blend');
+}
+
+/** Put the original starting weights back. */
+export async function resetBlend() {
+  const DEFAULTS: Record<string, number> = { sp: 1, fpi: 1, srs: 0.5, elo: 0.5, wepa: 1, sagarin: 1, fei: 0.75, tcc_mov: 1, manual: 0 };
+  for (const [key, w] of Object.entries(DEFAULTS)) {
+    const res = await db().from('rating_sources').update({ weight: w, total_weight: null }).eq('key', key);
+    if (res.error) await db().from('rating_sources').update({ weight: w }).eq('key', key); // before 0006
+  }
+  await db().from('model_settings').update({ margin_slope: 1, points_slope: 1 }).eq('id', 1);
+  await rebuildAfterWeightChange('Reset to the original weights');
 }
 
 export async function mapAlias(form: FormData) {

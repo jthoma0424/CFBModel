@@ -60,3 +60,6 @@ button:disabled { opacity: .6; cursor: wait; }
 .sport a.on { background: var(--panel2); color: var(--text); font-weight: 600; }
 .sport a:hover { text-decoration: none; color: var(--text); }
 header.top nav a.here { color: var(--text); font-weight: 600; }
+a.button { display: inline-block; background: #1f6feb; color: #fff; border-radius: 6px; padding: 6px 12px; font-weight: 550; }
+a.button:hover { text-decoration: none; filter: brightness(1.1); }
+.callout { border-left: 3px solid var(--accent); }

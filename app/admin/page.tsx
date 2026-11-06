@@ -1,8 +1,8 @@
 import { db } from '@/lib/supabase';
 import { currentSeason, currentWeek } from '@/lib/season';
-import { getSettings, getSources } from '@/lib/model/compute';
+import { OD_SOURCES, getSettings, getSources } from '@/lib/model/compute';
 import { teamMap } from '@/lib/queries';
-import { applyCalibration, calibrateAction, ignoreAlias, importManual, mapAlias, runJobAction, saveSettings, saveSources } from '../actions';
+import { ignoreAlias, importManual, mapAlias, runJobAction, saveSettings, saveSources } from '../actions';
 import { fmtKick } from '@/lib/format';
 import { RunButton } from './run-button';
 import { AdjustmentsPanel } from '../adjustments-panel';
@@ -13,23 +13,22 @@ export const maxDuration = 300;
 const JOB_HELP: [string, string][] = [
   ['setup', 'Teams, name aliases, calendar, schedule. Run once per season.'],
   ['cfbd', 'Scores + SP+, FPI, SRS, Elo, adjusted EPA, advanced stats, CFBD lines.'],
+  ['pbp', 'Play-by-play → in-house EPA ratings (1 CFBD call per new week; first run backfills 4 weeks at a time).'],
   ['scrape', 'Sagarin Predictor, FEI.'],
   ['odds', 'DraftKings spreads + totals (2 Odds API credits).'],
   ['model', 'Grade results, rebuild power ratings, update predictions.'],
-  ['daily', 'cfbd + scrape + odds + model in sequence.'],
+  ['daily', 'cfbd + pbp + scrape + odds + model in sequence.'],
 ];
 
 export default async function Admin({ searchParams }: { searchParams: Promise<Record<string, string>> }) {
   const sp = await searchParams;
   const season = currentSeason();
-  const [{ week }, settings, sources, teams, runsRes, unmatchedRes, calRes] = await Promise.all([
+  const [{ week }, settings, sources, teams, runsRes, unmatchedRes] = await Promise.all([
     currentWeek(season), getSettings(), getSources(), teamMap(),
     db().from('job_runs').select('*').order('started_at', { ascending: false }).limit(15),
     db().from('unmatched_names').select('*').eq('resolved', false).order('last_seen', { ascending: false }).limit(50),
-    db().from('job_runs').select('*').eq('job', 'calibrate').order('started_at', { ascending: false }).limit(1),
   ]);
   const fbs = [...teams.values()].filter((t) => t.classification === 'fbs' || t.classification === 'fcs').sort((a, b) => a.school.localeCompare(b.school));
-  const cal = calRes.data?.[0]?.detail;
 
   return (
     <>
@@ -53,6 +52,7 @@ export default async function Admin({ searchParams }: { searchParams: Promise<Re
           <option value="daily">Daily</option>
           <option value="model">Model</option>
           <option value="cfbd">Cfbd</option>
+          <option value="pbp">Pbp</option>
           <option value="odds">Odds</option>
         </select>
         <label style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>Week<input name="week" type="number" min="1" max="20" defaultValue={week} style={{ width: 70 }} /></label>
@@ -92,25 +92,19 @@ export default async function Admin({ searchParams }: { searchParams: Promise<Re
             <label>Totals play threshold<input name="total_edge_threshold" type="number" step="0.5" defaultValue={settings.total_edge_threshold} /></label>
             <label>Points cap (pts)<input name="points_cap" type="number" step="1" defaultValue={settings.points_cap} /></label>
             <label>Pace weight (0 = off)<input name="pace_weight" type="number" step="0.1" min="0" max="1.5" defaultValue={settings.pace_weight} /></label>
+            <label>Spread slope (1 = off)<input name="margin_slope" type="number" step="0.01" min="0.3" max="1.5" defaultValue={settings.margin_slope} /></label>
+            <label>Points slope (1 = off)<input name="points_slope" type="number" step="0.01" min="0.3" max="1.5" defaultValue={settings.points_slope} /></label>
             <button type="submit">Save</button>
           </form>
         </div>
         <div>
-          <h2>Calibrate weights</h2>
+          <h2>Test &amp; fit weights</h2>
           <div className="card">
-            <p className="muted" style={{ marginTop: 0 }}>Fits source weights, HFA and σ to completed games using the ratings stored before each game.</p>
-            <form action={calibrateAction}><button type="submit" className="secondary">Run calibration</button></form>
-            {cal && (
-              <>
-                <pre className="small" style={{ marginTop: 10 }}>{JSON.stringify(cal, null, 1)}</pre>
-                {cal.ok && (
-                  <form action={applyCalibration} style={{ marginTop: 8 }}>
-                    <input type="hidden" name="detail" value={JSON.stringify(cal)} />
-                    <button type="submit">Apply these weights</button>
-                  </form>
-                )}
-              </>
-            )}
+            <p className="muted" style={{ marginTop: 0 }}>
+              The <b>Blend lab</b> rebuilds each past week&apos;s ratings as they stood before kickoff and checks how well every source,
+              and every blend of them, predicted actual margins and points scored, next to the DraftKings line. It can then save a better blend.
+            </p>
+            <a className="button" href="/admin/blend">Open Blend lab →</a>
           </div>
         </div>
       </div>
@@ -119,7 +113,7 @@ export default async function Admin({ searchParams }: { searchParams: Promise<Re
       <form action={saveSources}>
         <div className="tablewrap">
           <table>
-            <thead><tr><th>Key</th><th>Name</th><th>Origin</th><th className="n">Scale (→ pts)</th><th className="n">Weight</th><th>On</th><th>Notes</th></tr></thead>
+            <thead><tr><th>Key</th><th>Name</th><th>Origin</th><th className="n">Scale (→ pts)</th><th className="n">Weight</th><th className="n" title="Weight for offense/defense ratings used in totals. Blank = same as Weight.">Totals weight</th><th>On</th><th>Notes</th></tr></thead>
             <tbody>
               {sources.map((s) => (
                 <tr key={s.key}>
@@ -127,6 +121,9 @@ export default async function Admin({ searchParams }: { searchParams: Promise<Re
                   <td>{s.name}</td><td className="muted">{s.origin}</td>
                   <td className="n"><input name={`scale_${s.key}`} type="number" step="0.01" defaultValue={s.scale} style={{ width: 80 }} /></td>
                   <td className="n"><input name={`weight_${s.key}`} type="number" step="0.05" defaultValue={s.weight} style={{ width: 80 }} /></td>
+                  <td className="n">{OD_SOURCES.includes(s.key)
+                    ? <input name={`total_weight_${s.key}`} type="number" step="0.05" defaultValue={s.total_weight ?? ''} placeholder="same" style={{ width: 80 }} />
+                    : <span className="muted">—</span>}</td>
                   <td><input name={`enabled_${s.key}`} type="checkbox" defaultChecked={s.enabled} /></td>
                   <td className="muted">{(s as any).notes}</td>
                 </tr>

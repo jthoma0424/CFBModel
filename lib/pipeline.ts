@@ -3,12 +3,13 @@ import { currentSeason, currentWeek } from './season';
 import { syncCalendar, syncCfbdLines, syncGames, syncRatingsAndStats, syncTeams } from './cfbd';
 import { syncOdds } from './odds';
 import { runScrapers } from './scrapers';
+import { computePbpRatings, syncPlayByPlay } from './pbp';
 import { buildPredictions, computePowerRatings, gradeAll } from './model/compute';
 import { db } from './supabase';
 import { addDays, cbbCurrentSeason, cbbSeasonGuess, etDate, syncCbbdRatings, syncCbbGames, syncCbbOdds, syncCbbPrior, syncCbbTeams, syncTorvik } from './cbb/ingest';
 import { buildCbbPredictions, computeCbbRatings, gradeCbb } from './cbb/model';
 
-export const JOBS = ['setup', 'cfbd', 'scrape', 'odds', 'model', 'daily', 'cbb_setup', 'cbb_daily', 'cbb_lines', 'cbb_model'] as const;
+export const JOBS = ['setup', 'cfbd', 'pbp', 'scrape', 'odds', 'model', 'daily', 'cbb_setup', 'cbb_daily', 'cbb_lines', 'cbb_model'] as const;
 export type JobName = (typeof JOBS)[number];
 
 let weekOverride: number | null = null;
@@ -21,6 +22,7 @@ async function ctx() {
 /**
  * setup  – teams, aliases, calendar (run once per season, or when teams look wrong)
  * cfbd   – games/scores, CFBD ratings + advanced stats, CFBD lines
+ * pbp    – CFBD play-by-play -> in-house opponent-adjusted EPA (tcc_epa), one API call per new week
  * scrape – Sagarin, FEI and any other registered scrapers
  * odds   – DraftKings spreads from The Odds API
  * model  – power ratings -> predictions -> grading
@@ -59,6 +61,13 @@ async function runJobInner(job: JobName): Promise<any> {
         const ratings = await syncRatingsAndStats(season, week);
         const lines = await syncCfbdLines(season).catch((e) => ({ cfbdLinesError: e.message }));
         return { season, week, ...games, ratings, ...lines };
+      });
+    case 'pbp':
+      return runLogged('pbp', async () => {
+        const { season, week } = await ctx();
+        const sync = await syncPlayByPlay(season);
+        const ratings = await computePbpRatings(season, week);
+        return { season, week, ...sync, ...ratings };
       });
     case 'scrape':
       return runLogged('scrape', async () => {
@@ -115,7 +124,7 @@ async function runJobInner(job: JobName): Promise<any> {
       const { count } = await db().from('teams').select('id', { count: 'exact', head: true });
       const out: Record<string, unknown> = {};
       if (!count) out.setup = await runJob('setup');
-      for (const j of ['cfbd', 'scrape', 'odds', 'model'] as const) out[j] = await runJob(j);
+      for (const j of ['cfbd', 'pbp', 'scrape', 'odds', 'model'] as const) out[j] = await runJob(j);
       return { ok: true, ...out };
     }
   }

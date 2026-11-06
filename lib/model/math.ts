@@ -286,3 +286,148 @@ export function applyAdjustments(adjHome: number, adjAway: number) {
     awayPts: OFFENSE_SHARE * adjAway - (1 - OFFENSE_SHARE) * adjHome,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Blend fitting (Blend lab)
+// ---------------------------------------------------------------------------
+/**
+ * Fit blend weights w and a home term h for   y ≈ h·loc + Σ w_k x_k
+ * with a ridge penalty that pulls w toward `prior` (e.g. equal weights summing to 1):
+ *   Σ (y − h·loc − x·w)² + λ Σ (w_k − prior_k)²
+ * Weights are kept ≥ 0 (negative ones are dropped and the fit is repeated).
+ */
+export function fitBlend(X: number[][], loc: number[], y: number[], prior: number[], lambda: number): { w: number[]; h: number } {
+  const k = prior.length;
+  let active = Array.from({ length: k }, (_, i) => i);
+  let w = new Array(k).fill(0), h = 0;
+  for (let iter = 0; iter <= k; iter++) {
+    const p = active.length + 1;
+    const A = Array.from({ length: p }, () => new Array(p).fill(0));
+    const b = new Array(p).fill(0);
+    for (let g = 0; g < y.length; g++) {
+      const row = [...active.map((j) => X[g][j]), loc[g]];
+      for (let i = 0; i < p; i++) {
+        b[i] += row[i] * y[g];
+        for (let j = 0; j < p; j++) A[i][j] += row[i] * row[j];
+      }
+    }
+    active.forEach((j, i) => { A[i][i] += lambda; b[i] += lambda * prior[j]; });
+    A[p - 1][p - 1] += 1e-6; // keeps h solvable if every game is neutral
+    const sol = solve(A, b);
+    w = new Array(k).fill(0);
+    active.forEach((j, i) => (w[j] = sol[i]));
+    h = sol[p - 1];
+    const neg = active.filter((j) => w[j] < 0);
+    if (!neg.length) break;
+    active = active.filter((j) => w[j] >= 0);
+    if (!active.length) { w = new Array(k).fill(0); break; }
+  }
+  return { w: w.map((v) => Math.max(0, v)), h };
+}
+
+export function rmse(err: number[]) { return err.length ? Math.sqrt(err.reduce((a, e) => a + e * e, 0) / err.length) : NaN; }
+export function mae(err: number[]) { return err.length ? err.reduce((a, e) => a + Math.abs(e), 0) / err.length : NaN; }
+/** Least-squares slope of y on x through the origin: 1.0 means x is already in the right units. */
+export function slopeThroughOrigin(x: number[], y: number[]) {
+  let xy = 0, xx = 0;
+  for (let i = 0; i < x.length; i++) { xy += x[i] * y[i]; xx += x[i] * x[i]; }
+  return xx > 0 ? xy / xx : NaN;
+}
+export function corr(x: number[], y: number[]) {
+  const mx = mean(x), my = mean(y);
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < x.length; i++) { sxy += (x[i] - mx) * (y[i] - my); sxx += (x[i] - mx) ** 2; syy += (y[i] - my) ** 2; }
+  return sxx > 0 && syy > 0 ? sxy / Math.sqrt(sxx * syy) : NaN;
+}
+/** Record betting against a line whenever |prediction − line| ≥ threshold. */
+export function recordVsLine(pred: number[], line: number[], actual: number[], threshold: number) {
+  let w = 0, l = 0, p = 0;
+  for (let i = 0; i < pred.length; i++) {
+    const d = pred[i] - line[i];
+    if (Math.abs(d) < threshold) continue;
+    const r = actual[i] - line[i];
+    if (r === 0) p++; else if ((r > 0) === (d > 0)) w++; else l++;
+  }
+  return { w, l, p };
+}
+
+// ---------------------------------------------------------------------------
+// Play-by-play (cfbscrapR-style)
+// ---------------------------------------------------------------------------
+export type PbpPlay = {
+  offense: string; defense: string; home: string; period: number; offenseScore: number; defenseScore: number;
+  down: number; distance: number; yardsGained: number; playType: string; ppa: number | null;
+};
+
+// Plays that aren't a real offensive snap (special teams, admin, penalties with no play).
+const NON_SCRIMMAGE = /kickoff|punt|field goal|extra point|two point|2pt|timeout|end of|end period|end half|end game|coin toss|penalty|kneel|uncategorized|safety|blocked/i;
+
+/** Garbage time (Connelly's cutoffs): lead > 38 in Q2, > 28 in Q3, > 22 in Q4. */
+export function isGarbageTime(period: number, margin: number) {
+  const m = Math.abs(margin);
+  return (period === 2 && m > 38) || (period === 3 && m > 28) || (period >= 4 && m > 22);
+}
+
+/** Successful play: 50% of the yards needed on 1st down, 70% on 2nd, 100% on 3rd/4th. */
+export function isSuccess(down: number, distance: number, gained: number) {
+  if (down === 1) return gained >= 0.5 * distance;
+  if (down === 2) return gained >= 0.7 * distance;
+  return gained >= distance;
+}
+
+export function isScrimmagePlay(p: PbpPlay) {
+  return p.ppa !== null && Number.isFinite(p.ppa) && p.down >= 1 && p.down <= 4 && !NON_SCRIMMAGE.test(p.playType ?? '');
+}
+
+export function isPass(playType: string) { return /pass|sack|interception/i.test(playType); }
+
+export type TeamGamePbp = {
+  offense: string; defense: string; offIsHome: boolean;
+  plays: number; epa: number; success: number; succEpa: number; // sums
+  rushPlays: number; rushEpa: number; passPlays: number; passEpa: number;
+};
+
+/** Sum one game's non-garbage scrimmage plays by offense. */
+export function aggregatePlays(plays: PbpPlay[]): TeamGamePbp[] {
+  const by = new Map<string, TeamGamePbp>();
+  for (const p of plays) {
+    if (!isScrimmagePlay(p) || isGarbageTime(p.period, p.offenseScore - p.defenseScore)) continue;
+    const key = `${p.offense}|${p.defense}`;
+    let a = by.get(key);
+    if (!a) by.set(key, (a = { offense: p.offense, defense: p.defense, offIsHome: p.offense === p.home, plays: 0, epa: 0, success: 0, succEpa: 0, rushPlays: 0, rushEpa: 0, passPlays: 0, passEpa: 0 }));
+    const e = p.ppa!;
+    a.plays++; a.epa += e;
+    if (isSuccess(p.down, p.distance, p.yardsGained)) { a.success++; a.succEpa += e; }
+    if (isPass(p.playType)) { a.passPlays++; a.passEpa += e; } else { a.rushPlays++; a.rushEpa += e; }
+  }
+  return [...by.values()];
+}
+
+/**
+ * Opponent-adjust a per-play stat. For each team-game (offense, defense, value = per-play average,
+ * weight = number of plays) fits   value ≈ mu + h·loc + O_offense + D_defense
+ * with ridge shrinkage of λ plays toward 0. O is "better than average offense", D is
+ * "worse than average defense" (allows more), both in the stat's units per play.
+ */
+export function adjustPerPlay(rows: { off: number; def: number; value: number; weight: number; loc: number }[], lambda: number) {
+  const ids = [...new Set(rows.flatMap((r) => [r.off, r.def]))];
+  const idx = new Map(ids.map((id, i) => [id, i]));
+  const n = ids.length, N = 2 * n + 2; // [mu, h, O..., D...]
+  const A = Array.from({ length: N }, () => new Array(N).fill(0));
+  const b = new Array(N).fill(0);
+  for (const r of rows) {
+    if (!(r.weight > 0)) continue;
+    const cols = [0, 1, 2 + idx.get(r.off)!, 2 + n + idx.get(r.def)!];
+    const x = [1, r.loc, 1, 1];
+    for (let i = 0; i < 4; i++) {
+      b[cols[i]] += r.weight * x[i] * r.value;
+      for (let j = 0; j < 4; j++) A[cols[i]][cols[j]] += r.weight * x[i] * x[j];
+    }
+  }
+  for (let i = 2; i < N; i++) A[i][i] += lambda;
+  A[1][1] += 1e-6;
+  const s = solve(A, b);
+  const out = new Map<number, { o: number; d: number }>();
+  ids.forEach((id, i) => out.set(id, { o: s[2 + i], d: s[2 + n + i] }));
+  return { mu: s[0], h: s[1], teams: out };
+}

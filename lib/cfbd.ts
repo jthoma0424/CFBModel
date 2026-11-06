@@ -81,7 +81,7 @@ export async function syncCalendar(season: number) {
   return { weeks: rows.length };
 }
 
-async function maxRegularWeek(season: number) {
+export async function maxRegularWeek(season: number) {
   const { data } = await db().from('calendar').select('week').eq('season', season).eq('season_type', 'regular').order('week', { ascending: false }).limit(1);
   return data?.[0]?.week ?? 15;
 }

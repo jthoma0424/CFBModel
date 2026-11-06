@@ -5,12 +5,14 @@ import { betProfit, evaluateSpread, evaluateTotal, fitWeights, gradeSpread, grad
 export type Settings = {
   hfa: number; sigma: number; edge_threshold: number; margin_cap: number; prior_weight: number; default_price: number;
   total_sigma: number; total_edge_threshold: number; points_cap: number; pace_weight: number;
+  margin_slope: number; points_slope: number;
 };
-export type Source = { key: string; name: string; origin: string; scale: number; weight: number; enabled: boolean };
+/** total_weight: weight for offense/defense (totals) blending; null = same as weight. */
+export type Source = { key: string; name: string; origin: string; scale: number; weight: number; total_weight: number | null; enabled: boolean };
 
 const NON_FBS_DEFAULT = -20; // average FCS team vs. average FBS team, points
 const NON_FBS_OD = { o: -10, d: 10 }; // FCS: scores ~10 fewer, allows ~10 more than average FBS
-const OD_SOURCES = ['sp', 'wepa', 'tcc_mov']; // sources that carry offense/defense splits
+export const OD_SOURCES = ['sp', 'wepa', 'tcc_epa', 'tcc_mov']; // sources that carry offense/defense splits
 
 /** Average points per team per game in completed FBS-vs-FBS games before `week`. */
 export async function leagueAvgPoints(season: number, week: number, isFbs?: Map<number, boolean>): Promise<number> {
@@ -37,12 +39,13 @@ export async function getSettings(): Promise<Settings> {
     margin_cap: Number(s.margin_cap ?? 28), prior_weight: Number(s.prior_weight ?? 3), default_price: Number(s.default_price ?? -110),
     total_sigma: Number(s.total_sigma ?? 13.5), total_edge_threshold: Number(s.total_edge_threshold ?? 3), points_cap: Number(s.points_cap ?? 30),
     pace_weight: Number(s.pace_weight ?? 1),
+    margin_slope: Number(s.margin_slope ?? 1), points_slope: Number(s.points_slope ?? 1),
   };
 }
 
 export async function getSources(): Promise<Source[]> {
   const { data } = await db().from('rating_sources').select('*').order('key');
-  return (data ?? []).map((s) => ({ ...s, scale: Number(s.scale), weight: Number(s.weight) }));
+  return (data ?? []).map((s) => ({ ...s, scale: Number(s.scale), weight: Number(s.weight), total_weight: s.total_weight === null || s.total_weight === undefined ? null : Number(s.total_weight) }));
 }
 
 /** Weighted mean over whichever sources a team has. */
@@ -84,32 +87,73 @@ export async function teamPace(season: number, week: number, isFbs: Map<number, 
   return { pace, league };
 }
 
+/** Everything needed to rebuild ratings for any week of a season, loaded once. */
+export type RatingInputs = {
+  settings: Settings;
+  sources: Source[]; // enabled only
+  teamIds: number[];
+  isFbs: Map<number, boolean>;
+  sourceRows: { source: string; team_id: number; week: number; rating: number; offense: number | null; defense: number | null }[]; // newest week first
+  games: { id: number; week: number; home_id: number; away_id: number; home_points: number; away_points: number; neutral_site: boolean }[]; // completed
+};
+
+export async function loadRatingInputs(season: number, maxWeek?: number): Promise<RatingInputs> {
+  const [settings, allSources, teams] = await Promise.all([
+    getSettings(), getSources(),
+    selectAll<{ id: number; classification: string | null }>((a, b) => db().from('teams').select('id,classification').range(a, b)),
+  ]);
+  const raw = await selectAll<any>((a, b) => {
+    let q = db().from('source_ratings').select('source,team_id,week,rating,offense,defense').eq('season', season).neq('source', 'tcc_mov');
+    if (maxWeek !== undefined) q = q.lte('week', maxWeek);
+    return q.order('week', { ascending: false }).order('source').order('team_id').range(a, b);
+  });
+  const games = await selectAll<any>((a, b) =>
+    db().from('games').select('id,week,home_id,away_id,home_points,away_points,neutral_site').eq('season', season).eq('completed', true).order('id').range(a, b),
+  );
+  return {
+    settings,
+    sources: allSources.filter((s) => s.enabled),
+    teamIds: teams.map((t) => t.id),
+    isFbs: new Map(teams.map((t) => [t.id, t.classification === 'fbs'])),
+    sourceRows: raw
+      .map((r) => ({ source: r.source, team_id: r.team_id, week: r.week, rating: Number(r.rating), offense: r.offense === null ? null : Number(r.offense), defense: r.defense === null ? null : Number(r.defense) }))
+      .sort((a, b) => b.week - a.week),
+    games: games.filter((g) => g.home_points !== null && g.away_points !== null),
+  };
+}
+
+export type RatingSnapshot = {
+  comps: Map<number, Record<string, number>>;            // team -> source -> points vs avg FBS
+  od: Map<number, Record<string, { o: number; d: number }>>; // team -> source -> off/def points
+  rating: Map<number, number>;                            // blended power rating
+  odBlend: Map<number, { o: number; d: number }>;         // blended offense/defense
+  mu: number;                                             // league avg points per team
+  movRows: { team_id: number; rating: number }[];
+  sourcesUsed: string[];
+  movGames: number;
+};
+
 /**
- * Build power ratings for model week `week`, using only source snapshots taken
- * at or before that week and game results from earlier weeks.
+ * Rebuild ratings as they stood going into `week`: each source's newest snapshot at or
+ * before that week, and only game results from earlier weeks. No database access.
  */
-export async function computePowerRatings(season: number, week: number) {
-  const settings = await getSettings();
-  const sources = (await getSources()).filter((s) => s.enabled);
-  const teams = await selectAll<{ id: number; classification: string | null }>((a, b) => db().from('teams').select('id,classification').range(a, b));
-  const isFbs = new Map(teams.map((t) => [t.id, t.classification === 'fbs']));
+export function ratingSnapshot(inp: RatingInputs, week: number): RatingSnapshot {
+  const { settings, sources, isFbs } = inp;
+  const enabled = new Set(sources.map((s) => s.key));
 
   // 1) Latest snapshot of each external source as of `week`
-  const raw = await selectAll<any>((a, b) =>
-    db().from('source_ratings').select('source,team_id,week,rating,offense,defense').eq('season', season).lte('week', week).neq('source', 'tcc_mov')
-      .order('week', { ascending: false }).range(a, b),
-  );
-  const latest = new Map<string, Map<number, number>>(); // source -> team -> raw
-  const latestOD = new Map<string, Map<number, { o: number; d: number }>>(); // source -> team -> raw off/def
+  const latest = new Map<string, Map<number, number>>();
+  const latestOD = new Map<string, Map<number, { o: number; d: number }>>();
   const latestWeek = new Map<string, number>();
-  for (const r of raw) {
+  for (const r of inp.sourceRows) {
+    if (r.week > week) continue;
     if (!latestWeek.has(r.source)) latestWeek.set(r.source, r.week);
     if (r.week !== latestWeek.get(r.source)) continue; // only the newest snapshot of each source
     if (!latest.has(r.source)) latest.set(r.source, new Map());
-    latest.get(r.source)!.set(r.team_id, Number(r.rating));
+    latest.get(r.source)!.set(r.team_id, r.rating);
     if (r.offense !== null && r.defense !== null && OD_SOURCES.includes(r.source)) {
       if (!latestOD.has(r.source)) latestOD.set(r.source, new Map());
-      latestOD.get(r.source)!.set(r.team_id, { o: Number(r.offense), d: Number(r.defense) });
+      latestOD.get(r.source)!.set(r.team_id, { o: r.offense, d: r.defense });
     }
   }
 
@@ -125,43 +169,39 @@ export async function computePowerRatings(season: number, week: number) {
     }
   }
   const weights = new Map(sources.map((s) => [s.key, s.weight]));
+  const odWeights = new Map(sources.map((s) => [s.key, s.total_weight ?? s.weight]));
 
   // 3) In-house MOV rating, regularized toward the external composite
   const priors = new Map<number, number>();
-  for (const t of teams) {
-    const ext = comps.has(t.id) ? blend(comps.get(t.id)!, new Map([...weights].filter(([k]) => k !== 'tcc_mov'))) : null;
-    if (ext !== null) priors.set(t.id, ext);
-    else if (isFbs.get(t.id)) priors.set(t.id, 0);
+  const extWeights = new Map([...weights].filter(([k]) => k !== 'tcc_mov'));
+  for (const id of inp.teamIds) {
+    const ext = comps.has(id) ? blend(comps.get(id)!, extWeights) : null;
+    if (ext !== null) priors.set(id, ext);
+    else if (isFbs.get(id)) priors.set(id, 0);
   }
-  const games = await selectAll<any>((a, b) =>
-    db().from('games').select('home_id,away_id,home_points,away_points,neutral_site').eq('season', season).eq('completed', true).lt('week', week).range(a, b),
-  );
-  const results = games
-    .filter((g) => g.home_points !== null && g.away_points !== null)
-    .map((g) => {
-      for (const id of [g.home_id, g.away_id]) if (!priors.has(id)) priors.set(id, isFbs.get(id) ? 0 : NON_FBS_DEFAULT);
-      return { home: g.home_id, away: g.away_id, margin: g.home_points - g.away_points, neutral: g.neutral_site };
-    });
-  const useMov = sources.some((s) => s.key === 'tcc_mov');
+  const before = inp.games.filter((g) => g.week < week);
+  const results = before.map((g) => {
+    for (const id of [g.home_id, g.away_id]) if (!priors.has(id)) priors.set(id, isFbs.get(id) ? 0 : NON_FBS_DEFAULT);
+    return { home: g.home_id, away: g.away_id, margin: g.home_points - g.away_points, neutral: g.neutral_site };
+  });
+  const useMov = enabled.has('tcc_mov');
+  const movRows: { team_id: number; rating: number }[] = [];
   if (useMov && (results.length || priors.size)) {
     const mov = movRatings(results, priors, { hfa: settings.hfa, cap: settings.margin_cap, lambda: settings.prior_weight });
     const fbsMean = mean([...mov.entries()].filter(([id]) => isFbs.get(id)).map(([, v]) => v));
-    const now = new Date().toISOString();
-    const movRows: any[] = [];
     for (const [id, v] of mov) {
       const c = v - fbsMean;
       if (!comps.has(id)) comps.set(id, {});
       comps.get(id)!.tcc_mov = c;
-      movRows.push({ season, week, source: 'tcc_mov', team_id: id, rating: Math.round(c * 100) / 100, fetched_at: now });
+      movRows.push({ team_id: id, rating: Math.round(c * 100) / 100 });
     }
-    await upsertChunked('source_ratings', movRows, 'season,week,source,team_id');
   }
 
   // 4) Offense / defense ratings for totals (points vs. average FBS team)
   const od = new Map<number, Record<string, { o: number; d: number }>>();
   const scaleOf = new Map(sources.map((s) => [s.key, s.scale]));
   for (const [src, m] of latestOD) {
-    if (!weights.get(src)) continue;
+    if (!enabled.has(src)) continue;
     const f = [...m.entries()].filter(([id]) => isFbs.get(id));
     const mo = mean(f.map(([, v]) => v.o)), md = mean(f.map(([, v]) => v.d));
     const sc = scaleOf.get(src) ?? 1;
@@ -172,22 +212,20 @@ export async function computePowerRatings(season: number, week: number) {
   }
   const blendOD = (c: Record<string, { o: number; d: number }>, keys = OD_SOURCES) => {
     let o = 0, d = 0, w = 0;
-    for (const k of keys) if (c[k] && (weights.get(k) ?? 0) > 0) { const wk = weights.get(k)!; o += wk * c[k].o; d += wk * c[k].d; w += wk; }
+    for (const k of keys) if (c[k] && (odWeights.get(k) ?? 0) > 0) { const wk = odWeights.get(k)!; o += wk * c[k].o; d += wk * c[k].d; w += wk; }
     return w > 0 ? { o: o / w, d: d / w } : null;
   };
-  const mu = await leagueAvgPoints(season, week, isFbs);
+  const mu = leagueAvgFromGames(inp.games, isFbs, week);
   if (useMov) {
     const odPriors = new Map<number, { o: number; d: number }>();
     for (const id of priors.keys()) {
       const ext = od.has(id) ? blendOD(od.get(id)!, OD_SOURCES.filter((k) => k !== 'tcc_mov')) : null;
       odPriors.set(id, ext ?? (isFbs.get(id) ? { o: 0, d: 0 } : NON_FBS_OD));
     }
-    const scoreRows = games
-      .filter((g) => g.home_points !== null && g.away_points !== null)
-      .flatMap((g) => [
-        { team: g.home_id, opp: g.away_id, points: g.home_points, loc: (g.neutral_site ? 0 : 1) as 1 | 0 | -1 },
-        { team: g.away_id, opp: g.home_id, points: g.away_points, loc: (g.neutral_site ? 0 : -1) as 1 | 0 | -1 },
-      ]);
+    const scoreRows = before.flatMap((g) => [
+      { team: g.home_id, opp: g.away_id, points: g.home_points, loc: (g.neutral_site ? 0 : 1) as 1 | 0 | -1 },
+      { team: g.away_id, opp: g.home_id, points: g.away_points, loc: (g.neutral_site ? 0 : -1) as 1 | 0 | -1 },
+    ]);
     const sr = scoringRatings(scoreRows, odPriors, { mu, hfa: settings.hfa, cap: settings.points_cap, lambda: settings.prior_weight });
     const f = [...sr.entries()].filter(([id]) => isFbs.get(id));
     const mo = mean(f.map(([, v]) => v.o)), md = mean(f.map(([, v]) => v.d));
@@ -197,25 +235,51 @@ export async function computePowerRatings(season: number, week: number) {
     }
   }
 
-  // 5) Pace (plays per game) for totals
-  const { pace } = await teamPace(season, week, isFbs);
-
-  // 6) Final composite + rank (rank among FBS only)
-  const rows: any[] = [];
+  // 5) Blended composite
+  const rating = new Map<number, number>();
+  const odBlend = new Map<number, { o: number; d: number }>();
   for (const [id, c] of comps) {
     const r = blend(c, weights);
     if (r === null) continue;
+    rating.set(id, r);
     const odv = (od.has(id) ? blendOD(od.get(id)!) : null) ?? (isFbs.get(id) ? null : NON_FBS_OD);
+    if (odv) odBlend.set(id, odv);
+  }
+  return { comps, od, rating, odBlend, mu, movRows, sourcesUsed: [...latest.keys()], movGames: results.length };
+}
+
+/** Average points per team per game in completed FBS-vs-FBS games before `week`. */
+export function leagueAvgFromGames(games: RatingInputs['games'], isFbs: Map<number, boolean>, week: number) {
+  const pts: number[] = [];
+  for (const g of games) if (g.week < week && isFbs.get(g.home_id) && isFbs.get(g.away_id)) pts.push(g.home_points, g.away_points);
+  return pts.length >= 40 ? mean(pts) : 28;
+}
+
+/**
+ * Build power ratings for model week `week`, using only source snapshots taken
+ * at or before that week and game results from earlier weeks.
+ */
+export async function computePowerRatings(season: number, week: number) {
+  const inp = await loadRatingInputs(season, week);
+  const snap = ratingSnapshot(inp, week);
+  if (snap.movRows.length) {
+    const now = new Date().toISOString();
+    await upsertChunked('source_ratings', snap.movRows.map((r) => ({ season, week, source: 'tcc_mov', team_id: r.team_id, rating: r.rating, fetched_at: now })), 'season,week,source,team_id');
+  }
+  const { pace } = await teamPace(season, week, inp.isFbs);
+  const rows: any[] = [];
+  for (const [id, r] of snap.rating) {
+    const odv = snap.odBlend.get(id) ?? null;
     rows.push({
-      season, week, team_id: id, rating: Math.round(r * 100) / 100, components: roundObj(c),
+      season, week, team_id: id, rating: Math.round(r * 100) / 100, components: roundObj(snap.comps.get(id)!),
       offense: odv ? Math.round(odv.o * 100) / 100 : null, defense: odv ? Math.round(odv.d * 100) / 100 : null,
       pace: pace.has(id) ? Math.round(pace.get(id)! * 10) / 10 : null,
       computed_at: new Date().toISOString(),
     });
   }
-  rows.filter((r) => isFbs.get(r.team_id)).sort((a, b) => b.rating - a.rating).forEach((r, i) => (r.rank = i + 1));
+  rows.filter((r) => inp.isFbs.get(r.team_id)).sort((a, b) => b.rating - a.rating).forEach((r, i) => (r.rank = i + 1));
   await upsertChunked('power_ratings', rows, 'season,week,team_id');
-  return { teamsRated: rows.length, sources: [...latest.keys()], movGames: results.length, leagueAvgPoints: Math.round(mu * 10) / 10 };
+  return { teamsRated: rows.length, sources: snap.sourcesUsed, movGames: snap.movGames, leagueAvgPoints: Math.round(snap.mu * 10) / 10 };
 }
 
 function roundObj(o: Record<string, number>) {
@@ -272,7 +336,7 @@ export async function buildPredictions(season: number, week: number) {
     // Manual adjustments (injuries etc.) in effect on game day
     const ah = adjustmentFor(adjs, g.home_id, g.start_date), aa = adjustmentFor(adjs, g.away_id, g.start_date);
     const adj = applyAdjustments(ah.points, aa.points);
-    const margin = hr - ar + (g.neutral_site ? 0 : s.hfa) + adj.margin;
+    const margin = s.margin_slope * (hr - ar) + (g.neutral_site ? 0 : s.hfa) + adj.margin;
     const row: any = {
       game_id: g.id, season, week, home_rating: hr, away_rating: ar,
       model_margin: round(margin), model_spread: round(-margin),
@@ -297,7 +361,8 @@ export async function buildPredictions(season: number, week: number) {
     // Totals: projected points from offense/defense ratings
     const ho = odMap.get(g.home_id), ao = odMap.get(g.away_id);
     if (ho && ao) {
-      const base = projectScore(ho, ao, mu, s.hfa, !!g.neutral_site);
+      const ps = s.points_slope;
+      const base = projectScore({ o: ho.o * ps, d: ho.d * ps }, { o: ao.o * ps, d: ao.d * ps }, mu, s.hfa, !!g.neutral_site);
       // Pace: a team without pace data (e.g. FCS) is treated as league-average speed.
       const pf = leaguePace > 0 && s.pace_weight > 0
         ? paceFactor(paceMap.get(g.home_id) ?? leaguePace, paceMap.get(g.away_id) ?? leaguePace, leaguePace, s.pace_weight)

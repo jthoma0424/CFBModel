@@ -143,3 +143,57 @@ test('manual adjustments', () => {
   const b = applyAdjustments(-3, -5);
   close(b.margin, 2); close(b.homePts - b.awayPts, 2);
 });
+
+import { fitBlend, slopeThroughOrigin, recordVsLine } from '../lib/model/math.ts';
+
+test('blend fit recovers weights and home edge', () => {
+  // y = 2.5·home + 0.7·a + 0.3·b, with b noisy-free; little shrinkage
+  const X: number[][] = [], loc: number[] = [], y: number[] = [];
+  for (let i = 0; i < 200; i++) {
+    const a = Math.sin(i) * 15, b = Math.cos(i * 1.7) * 12, l = i % 3 === 0 ? 0 : 1;
+    X.push([a, b]); loc.push(l); y.push(2.5 * l + 0.7 * a + 0.3 * b);
+  }
+  const f = fitBlend(X, loc, y, [0.5, 0.5], 0.01);
+  close(f.w[0], 0.7, 0.01); close(f.w[1], 0.3, 0.01); close(f.h, 2.5, 0.01);
+  // Huge penalty pulls toward the prior
+  const g = fitBlend(X, loc, y, [0.5, 0.5], 1e9);
+  close(g.w[0], 0.5, 0.01); close(g.w[1], 0.5, 0.01);
+  // A source that hurts gets weight 0, not a negative weight
+  const yb = y.map((v, i) => v - 0.6 * X[i][1]);
+  const n = fitBlend(X, loc, yb, [0.5, 0.5], 0.01);
+  assert.equal(n.w[1], 0); assert.ok(n.w[0] > 0.6);
+  close(slopeThroughOrigin([1, 2, 3], [2, 4, 6]), 2);
+  assert.deepEqual(recordVsLine([10, -5, 3, 7], [6, 0, 2, 7], [8, 1, 9, 0], 3), { w: 1, l: 1, p: 0 });
+});
+
+import { aggregatePlays, adjustPerPlay, isGarbageTime, isSuccess } from '../lib/model/math.ts';
+
+test('play-by-play filters and aggregation', () => {
+  assert.equal(isSuccess(1, 10, 5), true); assert.equal(isSuccess(2, 10, 6), false); assert.equal(isSuccess(3, 2, 2), true);
+  assert.equal(isGarbageTime(4, 24), true); assert.equal(isGarbageTime(4, -21), false); assert.equal(isGarbageTime(1, 50), false);
+  const base = { home: 'A', period: 1, offenseScore: 0, defenseScore: 0, down: 1, distance: 10 };
+  const agg = aggregatePlays([
+    { ...base, offense: 'A', defense: 'B', yardsGained: 6, playType: 'Rush', ppa: 0.5 },
+    { ...base, offense: 'A', defense: 'B', yardsGained: 0, playType: 'Pass Incompletion', ppa: -0.4 },
+    { ...base, offense: 'A', defense: 'B', yardsGained: 40, playType: 'Punt', ppa: 1 },        // special teams: skipped
+    { ...base, offense: 'A', defense: 'B', yardsGained: 3, playType: 'Rush', ppa: null },      // no EPA: skipped
+    { ...base, offense: 'B', defense: 'A', yardsGained: 20, playType: 'Pass Reception', ppa: 2, period: 4, offenseScore: 0, defenseScore: 30 }, // garbage
+    { ...base, offense: 'B', defense: 'A', yardsGained: 20, playType: 'Pass Reception', ppa: 1.5 },
+  ]);
+  const a = agg.find((x) => x.offense === 'A')!, b = agg.find((x) => x.offense === 'B')!;
+  assert.equal(a.plays, 2); close(a.epa, 0.1); assert.equal(a.success, 1); assert.equal(a.rushPlays, 1); assert.equal(a.offIsHome, true);
+  assert.equal(b.plays, 1); assert.equal(b.offIsHome, false);
+});
+
+test('opponent adjustment recovers offense and defense', () => {
+  const O = [0.2, 0, -0.15, 0.05], D = [-0.1, 0.12, 0, 0.03];
+  const rows: any[] = [];
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) if (i !== j) for (let k = 0; k < 3; k++)
+    rows.push({ off: i, def: j, value: 0.05 + O[i] + D[j] + (k - 1) * 0.01 * ((i + j) % 2 ? 1 : -1), weight: 60, loc: 0 });
+  const r = adjustPerPlay(rows, 1e-3);
+  // Only differences are identified; compare centered values.
+  const mo = O.reduce((a, b) => a + b) / 4, md = D.reduce((a, b) => a + b) / 4;
+  const fo = [0, 1, 2, 3].map((i) => r.teams.get(i)!.o), fd = [0, 1, 2, 3].map((i) => r.teams.get(i)!.d);
+  const mfo = fo.reduce((a, b) => a + b) / 4, mfd = fd.reduce((a, b) => a + b) / 4;
+  for (let i = 0; i < 4; i++) { close(fo[i] - mfo, O[i] - mo, 0.01); close(fd[i] - mfd, D[i] - md, 0.01); }
+});

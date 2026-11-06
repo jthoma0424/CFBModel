@@ -40,6 +40,12 @@ export default async function TeamPage({ params, searchParams }: { params: Promi
     selectAll<any>((a, b) => db().from('predictions').select('*').eq('season', season).range(a, b)),
     db().from('team_stats').select('metrics,week').eq('season', season).eq('team_id', id).eq('source', 'cfbd_advanced').order('week', { ascending: false }).limit(1),
   ]);
+  // In-house play-by-play ratings: newest snapshot, ranked among FBS teams
+  const pbpLatest = await db().from('source_ratings').select('week').eq('season', season).eq('source', 'tcc_epa').order('week', { ascending: false }).limit(1);
+  const pbpWeek = pbpLatest.data?.[0]?.week;
+  const pbpAll = pbpWeek ? await selectAll<any>((a, b) => db().from('source_ratings').select('team_id,offense,defense,raw').eq('season', season).eq('source', 'tcc_epa').eq('week', pbpWeek).range(a, b)) : [];
+  const pbpFbs = pbpAll.filter((r) => teams.get(r.team_id)?.classification === 'fbs');
+  const pbpMine = pbpAll.find((r) => r.team_id === id);
   const pmap = new Map(preds.map((p) => [p.game_id, p]));
   const latest = ratings[ratings.length - 1];
   const adv = statsRes.data?.[0]?.metrics;
@@ -100,6 +106,8 @@ export default async function TeamPage({ params, searchParams }: { params: Promi
         </div>
       </div>
 
+      {pbpMine && pbpWeek && <PbpTable mine={pbpMine} all={pbpFbs} week={pbpWeek} />}
+
       {adv && (
         <>
           <h2>Advanced stats (CFBD, garbage time excluded)</h2>
@@ -115,6 +123,44 @@ export default async function TeamPage({ params, searchParams }: { params: Promi
           </div>
         </>
       )}
+    </>
+  );
+}
+
+const PBP: [string, (r: any) => number, (r: any) => number][] = [
+  ['EPA per play', (r) => Number(r.offense), (r) => Number(r.defense)],
+  ['Success rate', (r) => r.raw?.sr_o, (r) => r.raw?.sr_d],
+  ['Explosiveness (EPA on successful plays)', (r) => r.raw?.expl_o, (r) => r.raw?.expl_d],
+  ['Rushing EPA per play', (r) => r.raw?.rush_o, (r) => r.raw?.rush_d],
+  ['Passing EPA per play', (r) => r.raw?.pass_o, (r) => r.raw?.pass_d],
+];
+
+/** Opponent-adjusted play-by-play stats vs. the average FBS team, with FBS rank (defense: lower is better). */
+function PbpTable({ mine, all, week }: { mine: any; all: any[]; week: number }) {
+  const rank = (get: (r: any) => number, v: number, higherBetter: boolean) =>
+    1 + all.filter((r) => (higherBetter ? get(r) > v : get(r) < v)).length;
+  const fmt = (v: number, pct: boolean) => (v === null || v === undefined || !Number.isFinite(v) ? '—' : `${v > 0 ? '+' : ''}${pct ? (v * 100).toFixed(1) + '%' : v.toFixed(3)}`);
+  return (
+    <>
+      <h2>Play-by-play, opponent-adjusted (in-house)</h2>
+      <p className="sub" style={{ marginBottom: 8 }}>
+        Built from CFBD play-by-play like cfbscrapR: scrimmage plays only, garbage time removed, adjusted for opponents.
+        Values are vs. the average FBS team. Defense shows what it allows, so negative is good. Games before week {week}; {mine.raw?.games ?? '?'} games.
+      </p>
+      <div className="tablewrap" style={{ maxWidth: 680 }}>
+        <table>
+          <thead><tr><th>Metric</th><th className="n">Offense</th><th className="n">Rank</th><th className="n">Defense</th><th className="n">Rank</th></tr></thead>
+          <tbody>
+            {PBP.map(([label, o, d], i) => (
+              <tr key={label}>
+                <td>{label}</td>
+                <td className={`n ${signClass(o(mine))}`}>{fmt(o(mine), i === 1)}</td><td className="n muted">{rank(o, o(mine), true)}</td>
+                <td className={`n ${signClass(-d(mine))}`}>{fmt(d(mine), i === 1)}</td><td className="n muted">{rank(d, d(mine), false)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }

@@ -91,6 +91,19 @@ export default async function Check() {
         ok: !adjErr,
         detail: adjErr ? 'Not run yet → paste supabase/migrations/0005_adjustments.sql into the Supabase SQL Editor and click Run.' : 'Installed',
       });
+      const { error: blendErr } = await db.from('model_settings').select('margin_slope,points_slope').limit(1);
+      const { error: twErr } = await db.from('rating_sources').select('total_weight').limit(1);
+      rows.push({
+        name: 'Blend lab update (0006_blend.sql)',
+        ok: !blendErr && !twErr,
+        detail: blendErr || twErr ? 'Not run yet → paste supabase/migrations/0006_blend.sql into the Supabase SQL Editor and click Run.' : 'Installed',
+      });
+      const { error: pbpErr } = await db.from('team_game_pbp').select('game_id').limit(1);
+      rows.push({
+        name: 'Play-by-play update (0007_pbp.sql)',
+        ok: !pbpErr,
+        detail: pbpErr ? 'Not run yet → paste supabase/migrations/0007_pbp.sql into the Supabase SQL Editor and click Run.' : 'Installed',
+      });
     } catch (e: any) {
       rows.push({ name: 'Connect to Supabase', ok: false, detail: e?.message ?? String(e) });
     }
